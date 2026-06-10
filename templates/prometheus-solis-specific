@@ -1,0 +1,78 @@
+# Solis-specific Prometheus template
+# Extends the standard template with Solis-only registers.
+# Extra variables: battery_voltage_bms_v, battery_current_bms_a,
+#   battery_charge_current_limit_bms_a, battery_discharge_current_limit_bms_a,
+#   battery_fault_status_1_bms, battery_fault_status_2_bms,
+#   ac_grid_port_power_w, household_load_power_w,
+#   household_load_today_kwh, household_load_total_kwh,
+#   household_load_year_kwh, household_load_month_kwh,
+#   backup_load_today_kwh, backup_load_total_kwh,
+#   backup_load_year_kwh, backup_load_month_kwh,
+#   backup_phase_power_w[L1..L3]
+
+# HELP battery_voltage_bms_v Battery BMS voltage volts
+# TYPE battery_voltage_bms_v gauge
+battery_voltage_bms_v{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_voltage_bms_v }}
+
+# HELP battery_current_bms_a Battery BMS current amps
+# TYPE battery_current_bms_a gauge
+battery_current_bms_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_current_bms_a }}
+
+# HELP battery_charge_current_limit_bms_a BMS charge current limit amps
+# TYPE battery_charge_current_limit_bms_a gauge
+battery_charge_current_limit_bms_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_charge_current_limit_bms_a }}
+
+# HELP battery_discharge_current_limit_bms_a BMS discharge current limit amps
+# TYPE battery_discharge_current_limit_bms_a gauge
+battery_discharge_current_limit_bms_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_discharge_current_limit_bms_a }}
+
+# HELP battery_fault_status_bms BMS fault status register (hex encoded as int)
+# TYPE battery_fault_status_bms gauge
+# battery_fault_status_1_bms hex={{ battery_fault_status_1_bms }}
+battery_fault_status_bms{brand="{{ brand }}",serial="{{ serial }}",register="1"} {{ battery_fault_status_1_bms_int }}
+# battery_fault_status_2_bms hex={{ battery_fault_status_2_bms }}
+battery_fault_status_bms{brand="{{ brand }}",serial="{{ serial }}",register="2"} {{ battery_fault_status_2_bms_int }}
+
+# HELP ac_grid_port_power_w AC grid port power watts
+# TYPE ac_grid_port_power_w gauge
+ac_grid_port_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ ac_grid_port_power_w }}
+
+# HELP household_load_power_w Household load power watts
+# TYPE household_load_power_w gauge
+household_load_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_power_w }}
+
+# HELP backup_phase_power_w Backup phase estimated power watts
+# TYPE backup_phase_power_w gauge
+{% for p in backup_phases %}backup_phase_power_w{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.power }}
+{% endfor %}
+# HELP household_load_today_kwh Household load today kWh
+# TYPE household_load_today_kwh gauge
+household_load_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_today_kwh }}
+
+# HELP household_load_total_kwh Household load total kWh
+# TYPE household_load_total_kwh gauge
+household_load_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_total_kwh }}
+
+# HELP household_load_year_kwh Household load year kWh
+# TYPE household_load_year_kwh gauge
+household_load_year_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_year_kwh }}
+
+# HELP household_load_month_kwh Household load month kWh
+# TYPE household_load_month_kwh gauge
+household_load_month_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_month_kwh }}
+
+# HELP backup_load_today_kwh Backup load today kWh
+# TYPE backup_load_today_kwh gauge
+backup_load_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_today_kwh }}
+
+# HELP backup_load_total_kwh Backup load total kWh
+# TYPE backup_load_total_kwh gauge
+backup_load_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_total_kwh }}
+
+# HELP backup_load_year_kwh Backup load year kWh
+# TYPE backup_load_year_kwh gauge
+backup_load_year_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_year_kwh }}
+
+# HELP backup_load_month_kwh Backup load month kWh
+# TYPE backup_load_month_kwh gauge
+backup_load_month_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_month_kwh }}

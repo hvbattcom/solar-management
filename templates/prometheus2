@@ -1,0 +1,238 @@
+# Prometheus metrics v2 — universal inverter metrics
+# Solis-specific registers are in prometheus2-solis-specific.
+# Section order mirrors the human-readable template.
+# Sign conventions:
+#   grid_*_power_w : positive = importing, negative = exporting
+#   battery_power_w: positive = charging,  negative = discharging
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+
+# HELP inverter_info Inverter identification labels
+# TYPE inverter_info gauge
+inverter_info{brand="{{ brand }}",serial="{{ serial }}",status="{{ status }}"} 1
+
+# HELP inverter_rated_power_w Inverter rated capacity watts (from config)
+# TYPE inverter_rated_power_w gauge
+inverter_rated_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_rated_power_w }}
+
+# HELP inverter_mppt_count Number of MPPT inputs configured
+# TYPE inverter_mppt_count gauge
+inverter_mppt_count{brand="{{ brand }}",serial="{{ serial }}"} {{ mppt_count }}
+
+# HELP inverter_temperature_c Inverter DC temperature celsius
+# TYPE inverter_temperature_c gauge
+inverter_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_temperature_c }}
+
+# HELP battery_temperature_c Battery temperature celsius
+# TYPE battery_temperature_c gauge
+battery_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_temperature_c }}
+
+# HELP grid_frequency_hz Grid frequency hertz
+# TYPE grid_frequency_hz gauge
+grid_frequency_hz{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_frequency_hz }}
+
+# ── PV Strings ────────────────────────────────────────────────────────────────
+
+# HELP pv_voltage_v PV string voltage volts
+# TYPE pv_voltage_v gauge
+{% for s in pv_strings %}pv_voltage_v{brand="{{ brand }}",serial="{{ serial }}",string="{{ s.name }}"} {{ s.voltage }}
+{% endfor %}
+# HELP pv_current_a PV string current amps
+# TYPE pv_current_a gauge
+{% for s in pv_strings %}pv_current_a{brand="{{ brand }}",serial="{{ serial }}",string="{{ s.name }}"} {{ s.current }}
+{% endfor %}
+# HELP pv_power_w PV string power watts (V×I)
+# TYPE pv_power_w gauge
+{% for s in pv_strings %}pv_power_w{brand="{{ brand }}",serial="{{ serial }}",string="{{ s.name }}"} {{ s.power }}
+{% endfor %}
+# HELP pv_total_power_w Total PV input power watts
+# TYPE pv_total_power_w gauge
+pv_total_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ pv_total_power_w }}
+
+# ── Inverter Output ───────────────────────────────────────────────────────────
+
+# HELP inverter_voltage_v Inverter output phase voltage volts
+# TYPE inverter_voltage_v gauge
+{% for p in inverter_phases %}inverter_voltage_v{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.voltage }}
+{% endfor %}
+# HELP inverter_current_a Inverter output phase current amps
+# TYPE inverter_current_a gauge
+{% for p in inverter_phases %}inverter_current_a{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.current }}
+{% endfor %}
+# HELP inverter_phase_power_w Inverter output phase apparent power watts (V×I)
+# TYPE inverter_phase_power_w gauge
+{% for p in inverter_phases %}inverter_phase_power_w{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.power }}
+{% endfor %}
+# HELP inverter_total_active_power_w Inverter total active output power watts
+# TYPE inverter_total_active_power_w gauge
+inverter_total_active_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_active_power_w }}
+
+# HELP inverter_power_factor Inverter total power factor (active / apparent)
+# TYPE inverter_power_factor gauge
+{% if inverter_power_factor_num is not none %}inverter_power_factor{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_power_factor }}
+{% endif %}
+# HELP inverter_output_pct Inverter output percent of rated capacity
+# TYPE inverter_output_pct gauge
+inverter_output_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_output_pct }}
+
+# HELP inverter_phase_load_pct Inverter output phase load percent of rated per phase
+# TYPE inverter_phase_load_pct gauge
+{% for p in inverter_phases %}{% if p.load_pct is not none %}inverter_phase_load_pct{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.load_pct }}
+{% endif %}{% endfor %}
+
+# ── Grid Exchange (CT) ────────────────────────────────────────────────────────
+
+# HELP grid_voltage_v Grid phase voltage volts (inverter measurement; CT has none)
+# TYPE grid_voltage_v gauge
+{% for p in grid_phases %}grid_voltage_v{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.voltage }}
+{% endfor %}
+# HELP grid_current_a Grid phase current amps (CT measurement)
+# TYPE grid_current_a gauge
+{% for p in grid_phases %}grid_current_a{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.current }}
+{% endfor %}
+# HELP grid_phase_power_w Grid phase active power watts (positive=import, negative=export)
+# TYPE grid_phase_power_w gauge
+{% for p in grid_phases %}grid_phase_power_w{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.power }}
+{% endfor %}
+# HELP grid_phase_power_factor Grid phase power factor magnitude (CT)
+# TYPE grid_phase_power_factor gauge
+{% for p in grid_phases %}{% if p.power_factor_num is not none %}grid_phase_power_factor{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.power_factor }}
+{% endif %}{% endfor %}
+# HELP grid_total_active_power_w Grid total active power watts (positive=import, negative=export)
+# TYPE grid_total_active_power_w gauge
+grid_total_active_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_power_w }}
+
+# HELP grid_total_power_pct Grid exchange percent of rated capacity
+# TYPE grid_total_power_pct gauge
+grid_total_power_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_power_pct }}
+
+# HELP grid_phase_load_pct Grid phase load percent of rated per phase
+# TYPE grid_phase_load_pct gauge
+{% for p in grid_phases %}{% if p.load_pct is not none %}grid_phase_load_pct{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.load_pct }}
+{% endif %}{% endfor %}
+
+# ── Backup Output ─────────────────────────────────────────────────────────────
+
+# HELP backup_voltage_v Backup output phase voltage volts
+# TYPE backup_voltage_v gauge
+{% for p in backup_phases %}backup_voltage_v{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.voltage }}
+{% endfor %}
+# HELP backup_current_a Backup output phase current amps
+# TYPE backup_current_a gauge
+{% for p in backup_phases %}backup_current_a{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.current }}
+{% endfor %}
+# HELP backup_phase_power_w Backup output phase apparent power watts (V×I)
+# TYPE backup_phase_power_w gauge
+{% for p in backup_phases %}backup_phase_power_w{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.power }}
+{% endfor %}
+# HELP backup_total_active_power_w Backup total output power watts
+# TYPE backup_total_active_power_w gauge
+backup_total_active_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_power_w }}
+
+# HELP backup_power_factor Backup output total power factor (active / apparent)
+# TYPE backup_power_factor gauge
+{% if backup_power_factor_num is not none %}backup_power_factor{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_power_factor }}
+{% endif %}
+# HELP backup_total_power_pct Backup output percent of rated capacity
+# TYPE backup_total_power_pct gauge
+backup_total_power_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_power_pct }}
+
+# HELP backup_phase_load_pct Backup phase load percent of rated per phase
+# TYPE backup_phase_load_pct gauge
+{% for p in backup_phases %}{% if p.load_pct is not none %}backup_phase_load_pct{brand="{{ brand }}",serial="{{ serial }}",phase="{{ p.name }}"} {{ p.load_pct }}
+{% endif %}{% endfor %}
+
+# ── Battery ───────────────────────────────────────────────────────────────────
+
+# HELP battery_voltage_v Battery pack voltage volts (inverter ADC)
+# TYPE battery_voltage_v gauge
+battery_voltage_v{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_voltage_v }}
+
+# HELP battery_current_a Battery current amps
+# TYPE battery_current_a gauge
+battery_current_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_current_a }}
+
+# HELP battery_power_w Battery power watts (positive=charging, negative=discharging)
+# TYPE battery_power_w gauge
+battery_power_w{brand="{{ brand }}",serial="{{ serial }}",direction="{{ battery_direction }}"} {{ battery_power_w }}
+
+# HELP battery_soc_pct Battery state of charge percent
+# TYPE battery_soc_pct gauge
+battery_soc_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_soc_pct }}
+
+# HELP battery_soh_pct Battery state of health percent
+# TYPE battery_soh_pct gauge
+battery_soh_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_soh_pct }}
+
+# ── Energy Counters ───────────────────────────────────────────────────────────
+
+# HELP pv_generation_today_kwh PV generation today kWh
+# TYPE pv_generation_today_kwh gauge
+pv_generation_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ pv_generation_today_kwh }}
+
+# HELP pv_generation_total_kwh PV generation total kWh
+# TYPE pv_generation_total_kwh gauge
+pv_generation_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ pv_generation_total_kwh }}
+
+# HELP grid_import_today_kwh Grid energy imported today kWh
+# TYPE grid_import_today_kwh gauge
+grid_import_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_import_today_kwh }}
+
+# HELP grid_import_total_kwh Grid energy imported total kWh
+# TYPE grid_import_total_kwh gauge
+grid_import_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_import_total_kwh }}
+
+# HELP grid_export_today_kwh Grid energy exported today kWh
+# TYPE grid_export_today_kwh gauge
+grid_export_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_export_today_kwh }}
+
+# HELP grid_export_total_kwh Grid energy exported total kWh
+# TYPE grid_export_total_kwh gauge
+grid_export_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_export_total_kwh }}
+
+# HELP load_consumption_today_kwh Total load consumption today kWh
+# TYPE load_consumption_today_kwh gauge
+load_consumption_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ load_consumption_today_kwh }}
+
+# HELP load_consumption_total_kwh Total load consumption kWh
+# TYPE load_consumption_total_kwh gauge
+load_consumption_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ load_consumption_total_kwh }}
+
+# HELP battery_charge_today_kwh Battery charge energy today kWh
+# TYPE battery_charge_today_kwh gauge
+battery_charge_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_charge_today_kwh }}
+
+# HELP battery_charge_total_kwh Battery charge energy total kWh
+# TYPE battery_charge_total_kwh gauge
+battery_charge_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_charge_total_kwh }}
+
+# HELP battery_discharge_today_kwh Battery discharge energy today kWh
+# TYPE battery_discharge_today_kwh gauge
+battery_discharge_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_discharge_today_kwh }}
+
+# HELP battery_discharge_total_kwh Battery discharge energy total kWh
+# TYPE battery_discharge_total_kwh gauge
+battery_discharge_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_discharge_total_kwh }}
+
+# ── Fault & Status ────────────────────────────────────────────────────────────
+
+# HELP inverter_status_code Inverter status code integer (register 33095)
+# TYPE inverter_status_code gauge
+inverter_status_code{brand="{{ brand }}",serial="{{ serial }}",hex="{{ status_hex }}",desc="{{ status_desc }}"} {{ status_code_int }}
+
+# HELP inverter_op_status_code Operating status register 33121 raw value
+# TYPE inverter_op_status_code gauge
+inverter_op_status_code{brand="{{ brand }}",serial="{{ serial }}",hex="{{ op_status_hex }}",bits="{{ op_status_label }}"} {{ op_status_raw }}
+
+# HELP inverter_op_status_bit Active operating status bit flags (register 33121)
+# TYPE inverter_op_status_bit gauge
+{% for bit_name in op_status_bits %}inverter_op_status_bit{brand="{{ brand }}",serial="{{ serial }}",bit="{{ bit_name }}"} 1
+{% endfor %}
+# HELP inverter_fault_register Fault register raw value (registers 33116-33120)
+# TYPE inverter_fault_register gauge
+{% for fkey, fd in fault_data.items() %}inverter_fault_register{brand="{{ brand }}",serial="{{ serial }}",register="{{ fd.name }}",hex="{{ fd.hex }}"} {{ fd.raw }}
+{% endfor %}
+# HELP inverter_fault_bit Active decoded fault bits (registers 33116-33120)
+# TYPE inverter_fault_bit gauge
+{% for fkey, fd in fault_data.items() %}{% for bit_name in fd.active %}inverter_fault_bit{brand="{{ brand }}",serial="{{ serial }}",register="{{ fd.name }}",fault="{{ bit_name }}"} 1
+{% endfor %}{% endfor %}

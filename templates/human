@@ -1,0 +1,55 @@
+=== Inverter Status ===
+Status: {{ status }}
+Serial: {{ serial }}
+Rated Power: {{ inverter_rated_power_w }}W
+MPPT Inputs: {{ mppt_count }}
+DC Temperature: {{ inverter_temperature_c }}°C
+Battery Temperature: {{ battery_temperature_c }}°C
+Grid Frequency: {{ grid_frequency_hz }}Hz
+
+=== PV Status ===
+{% for s in pv_strings %}{{ s.name }}: {{ s.voltage }}V, {{ s.current }}A, {{ s.power }}W
+{% endfor %}-------------------------
+Total PV ({{ active_pv_strings }} active): {{ pv_total_power_w }}W
+
+=== Inverter Output ===
+{% for p in inverter_phases %}{{ p.name }}: {{ p.voltage }}V, {{ p.current }}A, {{ p.power }}W, {{ p.load_pct if p.load_pct is not none else 'NaN' }}%
+{% endfor %}-------------------------
+Total Inverter Power: {{ inverter_active_power_w }}W, PF {{ inverter_power_factor }}  [{{ inverter_output_pct if inverter_output_pct is not none else 'NaN' }}% of rated]
+
+=== Grid Exchange (CT) ===
+{% for p in grid_phases %}{{ p.name }}: {{ p.voltage }}V, {{ p.current }}A, {{ p.power }}W, PF {{ p.power_factor }}, {{ p.load_pct if p.load_pct is not none else 'NaN' }}%
+{% endfor %}-------------------------
+Total Grid Power: {{ grid_power_w }}W ({{ grid_direction }})  [{{ grid_power_pct if grid_power_pct is not none else 'NaN' }}% of rated]
+
+=== Backup Power ===
+{% for p in backup_phases %}{{ p.name }}: {{ p.voltage }}V, {{ p.current }}A, {{ p.power }}W, {{ p.load_pct if p.load_pct is not none else 'NaN' }}%
+{% endfor %}-------------------------
+Total Backup Power: {{ backup_load_power_w }}W, PF {{ backup_power_factor }}  [{{ backup_power_pct if backup_power_pct is not none else 'NaN' }}% of rated]
+
+=== Battery Status ===
+Battery: {{ battery_voltage_v }}V, {{ battery_current_a }}A, {{ battery_power_w }}W, {{ battery_temperature_c }}°C, {{ battery_soc_pct }}%, {{ battery_soh_pct }}% ({{ battery_direction }})
+
+=== Daily Energy Statistics ===
+PV Generation:       {{ pv_generation_today_kwh }}kWh
+Load Consumption:    {{ load_consumption_today_kwh }}kWh
+Grid Import:         {{ grid_import_today_kwh }}kWh
+Grid Export:         {{ grid_export_today_kwh }}kWh
+Battery Charge:      {{ battery_charge_today_kwh }}kWh
+Battery Discharge:   {{ battery_discharge_today_kwh }}kWh
+
+=== Total Energy Statistics ===
+Total PV Generation:     {{ pv_generation_total_kwh }}kWh
+Total Load Consumption:  {{ load_consumption_total_kwh }}kWh
+Total Grid Import:       {{ grid_import_total_kwh }}kWh
+Total Grid Export:       {{ grid_export_total_kwh }}kWh
+Total Battery Charge:    {{ battery_charge_total_kwh }}kWh
+Total Battery Discharge: {{ battery_discharge_total_kwh }}kWh
+
+=== Inverter Status ===
+Status : {{ status }} ({{ status_hex }}) — {{ status_desc }}
+Op Flags: {{ op_status_label }} ({{ op_status_hex }})
+
+=== Fault Registers ===
+{% for fkey, fd in fault_data.items() %}{{ fd.name | upper | replace("_"," ") }}: {{ fd.hex }}  {{ "⚠ " + fd.label if fd.active else "OK" }}
+{% endfor %}

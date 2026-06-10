@@ -1,0 +1,69 @@
+# Solis-specific Prometheus metrics v2
+# Appended to prometheus2 output; covers registers not present on generic inverters.
+
+# ── Battery BMS ───────────────────────────────────────────────────────────────
+
+# HELP battery_voltage_bms_v Battery BMS reported voltage volts (per-pack, not total)
+# TYPE battery_voltage_bms_v gauge
+battery_voltage_bms_v{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_voltage_bms_v }}
+
+# HELP battery_current_bms_a Battery BMS current amps
+# TYPE battery_current_bms_a gauge
+battery_current_bms_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_current_bms_a }}
+
+# HELP battery_charge_limit_a BMS charge current limit amps
+# TYPE battery_charge_limit_a gauge
+battery_charge_limit_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_charge_current_limit_bms_a }}
+
+# HELP battery_discharge_limit_a BMS discharge current limit amps
+# TYPE battery_discharge_limit_a gauge
+battery_discharge_limit_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_discharge_current_limit_bms_a }}
+
+# HELP battery_fault_status_bms BMS fault status register (decoded as integer)
+# TYPE battery_fault_status_bms gauge
+battery_fault_status_bms{brand="{{ brand }}",serial="{{ serial }}",register="1"} {{ battery_fault_status_1_bms_int }}
+battery_fault_status_bms{brand="{{ brand }}",serial="{{ serial }}",register="2"} {{ battery_fault_status_2_bms_int }}
+
+# ── Instantaneous Load ────────────────────────────────────────────────────────
+
+# HELP household_load_power_w Household load instantaneous power watts
+# TYPE household_load_power_w gauge
+household_load_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_power_w }}
+
+# HELP ac_grid_port_power_w AC grid port power watts (inverter-side, not CT)
+# TYPE ac_grid_port_power_w gauge
+ac_grid_port_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ ac_grid_port_power_w }}
+
+# ── Household & Backup Load Energy ───────────────────────────────────────────
+
+# HELP household_load_today_kwh Household sub-meter load today kWh
+# TYPE household_load_today_kwh gauge
+household_load_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_today_kwh }}
+
+# HELP household_load_month_kwh Household sub-meter load this month kWh
+# TYPE household_load_month_kwh gauge
+household_load_month_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_month_kwh }}
+
+# HELP household_load_year_kwh Household sub-meter load this year kWh
+# TYPE household_load_year_kwh gauge
+household_load_year_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_year_kwh }}
+
+# HELP household_load_total_kwh Household sub-meter load total kWh
+# TYPE household_load_total_kwh gauge
+household_load_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ household_load_total_kwh }}
+
+# HELP backup_load_today_kwh Backup load energy today kWh
+# TYPE backup_load_today_kwh gauge
+backup_load_today_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_today_kwh }}
+
+# HELP backup_load_month_kwh Backup load energy this month kWh
+# TYPE backup_load_month_kwh gauge
+backup_load_month_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_month_kwh }}
+
+# HELP backup_load_year_kwh Backup load energy this year kWh
+# TYPE backup_load_year_kwh gauge
+backup_load_year_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_year_kwh }}
+
+# HELP backup_load_total_kwh Backup load energy total kWh
+# TYPE backup_load_total_kwh gauge
+backup_load_total_kwh{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_total_kwh }}

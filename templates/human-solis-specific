@@ -1,0 +1,22 @@
+
+=== Solis Specific Info ===
+Battery Voltage (BMS):             {{ battery_voltage_bms_v }}V
+Battery Current (BMS):             {{ battery_current_bms_a }}A
+Charge Current Limit (BMS):        {{ battery_charge_current_limit_bms_a }}A
+Discharge Current Limit (BMS):     {{ battery_discharge_current_limit_bms_a }}A
+Battery Fault Status 1 (BMS):      {{ battery_fault_status_1_bms }}
+Battery Fault Status 2 (BMS):      {{ battery_fault_status_2_bms }}
+AC Grid Port Power:                {{ ac_grid_port_power_w }}W
+Household Load Power:              {{ household_load_power_w }}W
+
+=== Household Load Energy ===
+Today:   {{ household_load_today_kwh }}kWh
+Month:   {{ household_load_month_kwh }}kWh
+Year:    {{ household_load_year_kwh }}kWh
+Total:   {{ household_load_total_kwh }}kWh
+
+=== Backup Load Energy ===
+Today:   {{ backup_load_today_kwh }}kWh
+Month:   {{ backup_load_month_kwh }}kWh
+Year:    {{ backup_load_year_kwh }}kWh
+Total:   {{ backup_load_total_kwh }}kWh
