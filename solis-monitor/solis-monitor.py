@@ -20,6 +20,7 @@ Improvements over v2 (reliability):
 
 import argparse
 import configparser
+import json
 import math
 import re
 import sys
@@ -33,6 +34,28 @@ CONFIG_FILE = "config.cfg"
 DEFAULTS_FILE = "default_sanity_ranges.cfg"
 SECTION = "SolisInverter"
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+# ── Storage settings register layout ─────────────────────────────────────────
+STORAGE_BLOCK1_START = 43024   # battery reserve %
+STORAGE_BLOCK1_COUNT = 87      # 43024-43110: reserve % + mode bitmask
+STORAGE_BLOCK2_START = 43483   # hybrid function control (bit 3 = allow export)
+STORAGE_BLOCK2_COUNT = 1
+
+# 43110 mode bitmask
+STORAGE_MODE_BITS = {
+    0:  "Self Use",
+    1:  "Time of Use",
+    2:  "Off Grid",
+    6:  "Feed In Priority",
+    11: "Peak Shaving",
+}
+
+# ── TOU register layout ──────────────────────────────────────────────────────
+TOU_BLOCK_START = 43707   # V2 enable switch; charge slots start at 43708
+TOU_BLOCK_COUNT = 85      # 43707-43791: switch + 6 charge slots + 6 discharge slots
+TOU_SLOT_FIELDS = 7       # per slot: SOC%, current A, cutoff V, start_h, start_m, end_h, end_m
+TOU_CHARGE_START    = 43708
+TOU_DISCHARGE_START = 43750
 
 # ── Reliability tunables ─────────────────────────────────────────────────────
 BLOCK_RETRIES       = 3      # attempts per POLL_BLOCK before adaptive fallback
@@ -609,6 +632,137 @@ def read_registers(client, cfg):
 
     return regmap
 
+# ── TOU (holding registers, FC3) ─────────────────────────────────────────────
+
+def read_tou_registers(client, cfg):
+    return _read_holding_block(client, cfg, TOU_BLOCK_START, TOU_BLOCK_COUNT, "TOU block")
+
+def _decode_tou_slot(regmap, base, enabled):
+    soc_pct   = regmap.get(base)
+    current_a = regmap.get(base + 1)
+    cutoff_v  = regmap.get(base + 2)
+    start_h   = regmap.get(base + 3, 0)
+    start_m   = regmap.get(base + 4, 0)
+    end_h     = regmap.get(base + 5, 0)
+    end_m     = regmap.get(base + 6, 0)
+    return {
+        "enabled":   enabled,
+        "soc_pct":   soc_pct   if soc_pct   is not None else 0,
+        "current_a": (current_a * 0.1) if current_a is not None else 0.0,
+        "cutoff_v":  (cutoff_v * 0.1) if cutoff_v is not None else 0.0,
+        "start":     f"{start_h:02d}:{start_m:02d}",
+        "end":       f"{end_h:02d}:{end_m:02d}",
+    }
+
+def decode_tou(regmap):
+    """Decode TOU V2 registers. Returns None if the block was not read.
+    Register 43707 is a bitmask: bits 0-5 = charge slots 1-6, bits 6-11 = discharge slots 1-6.
+    """
+    if TOU_BLOCK_START not in regmap:
+        return None
+    switch = regmap[TOU_BLOCK_START]
+    charge_slots = [
+        _decode_tou_slot(regmap, TOU_CHARGE_START + i * TOU_SLOT_FIELDS, bool((switch >> i) & 1))
+        for i in range(6)
+    ]
+    discharge_slots = [
+        _decode_tou_slot(regmap, TOU_DISCHARGE_START + i * TOU_SLOT_FIELDS, bool((switch >> (6 + i)) & 1))
+        for i in range(6)
+    ]
+    return {
+        "enabled":         bool(switch),
+        "charge_slots":    charge_slots,
+        "discharge_slots": discharge_slots,
+    }
+
+# ── Storage settings (holding registers, FC3) ────────────────────────────────
+
+def _read_holding_block(client, cfg, start, count, label):
+    """Read a single holding-register block with retries. Returns partial regmap."""
+    slave_id       = cfg["slave_id"]
+    use_zero_based = cfg["use_zero_based"]
+    address = start - 1 if use_zero_based else start
+    for attempt in range(BLOCK_RETRIES):
+        rr = client.read_holding_registers(address=address, count=count, device_id=slave_id)
+        if not rr.isError():
+            regmap = {}
+            _store_block(regmap, start, rr.registers)
+            return regmap
+        print(f"#WARN: {label} attempt {attempt + 1}/{BLOCK_RETRIES} failed: {rr}", file=sys.stderr)
+        if attempt < BLOCK_RETRIES - 1:
+            time.sleep(BLOCK_RETRY_DELAY)
+    print(f"#WARN: {label} unavailable", file=sys.stderr)
+    return {}
+
+def read_storage_registers(client, cfg):
+    regmap = {}
+    regmap.update(_read_holding_block(client, cfg, STORAGE_BLOCK1_START, STORAGE_BLOCK1_COUNT, "storage block1"))
+    regmap.update(_read_holding_block(client, cfg, STORAGE_BLOCK2_START, STORAGE_BLOCK2_COUNT, "storage block2"))
+    return regmap
+
+def decode_storage(regmap):
+    """Decode storage settings. Returns None if key registers are missing."""
+    reg43110 = regmap.get(43110)
+    reg43483 = regmap.get(43483)
+    if reg43110 is None:
+        return None
+
+    mode = next(
+        (name for bit, name in sorted(STORAGE_MODE_BITS.items()) if (reg43110 >> bit) & 1),
+        "Unknown",
+    )
+    raw_export_limit = regmap.get(43074)
+    return {
+        "mode":                  mode,
+        "battery_reserve_on":    bool((reg43110 >> 4) & 1),
+        "battery_reserve_pct":   regmap.get(43024, 0),
+        "allow_grid_charge":     bool((reg43110 >> 5) & 1),
+        "allow_export":          bool((reg43483 >> 3) & 1) if reg43483 is not None else None,
+        "max_export_power_w":    raw_export_limit * 100 if raw_export_limit is not None else None,
+    }
+
+def dump_storage_registers(regmap):
+    """Print raw storage register values for debugging."""
+    print("=== Storage Register Dump ===")
+    targets = {
+        43024: "battery_reserve_pct",
+        43074: "max_export_power   ",
+        43110: "mode_bitmask       ",
+        43483: "hybrid_func_ctrl   ",
+    }
+    for reg, label in sorted(targets.items()):
+        val = regmap.get(reg)
+        if val is not None:
+            print(f"  {reg}  {label} : {val:6d}  (0x{val:04X})")
+        else:
+            print(f"  {reg}  {label} :    N/A")
+
+    reg43110 = regmap.get(43110)
+    if reg43110 is not None:
+        print(f"\n  43110 mode bits:")
+        for bit, name in sorted(STORAGE_MODE_BITS.items()):
+            print(f"    bit {bit:2d} ({name:16s}): {(reg43110 >> bit) & 1}")
+        print(f"    bit  4 (battery reserve   ): {(reg43110 >> 4) & 1}")
+        print(f"    bit  5 (allow grid charge  ): {(reg43110 >> 5) & 1}")
+
+    reg43074 = regmap.get(43074)
+    if reg43074 is not None:
+        print(f"\n  43074 max export power: {reg43074 * 100} W  (raw {reg43074})")
+
+    reg43483 = regmap.get(43483)
+    if reg43483 is not None:
+        print(f"\n  43483 hybrid ctrl bits:")
+        print(f"    bit  3 (allow export       ): {(reg43483 >> 3) & 1}")
+
+    KNOWN = {43024, 43074, 43110, 43483}
+    print("\n  Full scan 43000-43483 (non-zero, unknown registers only):")
+    for reg in range(43000, 43484):
+        if reg in KNOWN:
+            continue
+        val = regmap.get(reg)
+        if val is not None and val != 0:
+            print(f"    {reg}: {val}  (0x{val:04X})")
+
 # ── Build & validate values ───────────────────────────────────────────────────
 
 def build_values(regmap, cfg):
@@ -906,6 +1060,29 @@ def serial_error_human(expected, read):
 
 # ── Jinja2 rendering ──────────────────────────────────────────────────────────
 
+def _jinja_jv(v):
+    """Serialize a context value to a JSON literal (number, bool, null, or string)."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return "null"
+        return str(int(v)) if v == int(v) else str(v)
+    s = str(v)
+    if s in ("NaN", "N/A"):
+        return "null"
+    try:
+        f = float(s)
+        if math.isnan(f) or math.isinf(f):
+            return "null"
+        return str(int(f)) if f == int(f) else s
+    except (ValueError, TypeError):
+        return json.dumps(s)
+
 def get_jinja_env():
     if not TEMPLATES_DIR.exists():
         raise FileNotFoundError(
@@ -913,13 +1090,15 @@ def get_jinja_env():
             "Please create ./templates/ with files: prometheus, human, "
             "prometheus-solis-specific, human-solis-specific"
         )
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    env.filters["jv"] = _jinja_jv
+    return env
 
 def render(fmt, ctx, solis_specific=True):
     env    = get_jinja_env()
@@ -934,11 +1113,38 @@ def render(fmt, ctx, solis_specific=True):
 
 # ── CLI / main ────────────────────────────────────────────────────────────────
 
+def dump_tou_registers(regmap):
+    """Print raw TOU register values to stdout for debugging."""
+    SLOT_LABELS = ["soc_cutoff", "current   ", "cutoff_v  ", "start_hour", "start_min ", "end_hour  ", "end_min   "]
+    switch = regmap.get(TOU_BLOCK_START)
+    sw_str = f"{switch}  (0x{switch:04X})" if switch is not None else "N/A"
+    print("=== TOU Register Dump ===")
+    print(f"43707  TOU V2 Switch : {sw_str}")
+    if switch is not None:
+        charge_bits    = " ".join(f"C{i+1}={'1' if (switch >> i)     & 1 else '0'}" for i in range(6))
+        discharge_bits = " ".join(f"D{i+1}={'1' if (switch >> (6+i)) & 1 else '0'}" for i in range(6))
+        print(f"         Bitmask    : {charge_bits}  {discharge_bits}")
+
+    for label, base in [("Charge", TOU_CHARGE_START), ("Discharge", TOU_DISCHARGE_START)]:
+        print(f"\n{label} Slots:")
+        for slot in range(6):
+            slot_base = base + slot * TOU_SLOT_FIELDS
+            print(f"  Slot {slot + 1} (base {slot_base}):")
+            for field, name in enumerate(SLOT_LABELS):
+                reg = slot_base + field
+                val = regmap.get(reg)
+                val_str = f"{val:6d}  (0x{val:04X})" if val is not None else "   N/A"
+                print(f"    {reg}  {name} : {val_str}")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Solis Modbus poller")
-    parser.add_argument("--format", choices=["human", "prometheus", "prometheus2"], default="human")
+    parser.add_argument("--format", choices=["human", "prometheus", "json"], default="human")
     parser.add_argument("--no-solis-specific", action="store_true",
                         help="Skip the solis-specific template section")
+    parser.add_argument("--dump-tou", action="store_true",
+                        help="Print raw TOU register values and exit (for debugging)")
+    parser.add_argument("--dump-storage", action="store_true",
+                        help="Print raw storage setting register values and exit (for debugging)")
     return parser.parse_args()
 
 def _connect(ip, port, timeout=5, retries=3):
@@ -960,6 +1166,37 @@ def main():
 
     client = _connect(cfg["ip"], cfg["port"])
     try:
+        if args.dump_tou:
+            dump_tou_registers(read_tou_registers(client, cfg))
+            return
+        if args.dump_storage:
+            regmap = {}
+            offset = 1 if cfg.get("use_zero_based_addressing", "false").lower() == "true" else 0
+            slave_id = int(cfg.get("slave_id", 1))
+            print("Scanning holding registers 43000-43600...", file=sys.stderr)
+            for start in range(43000, 43601, 100):
+                count = min(100, 43601 - start)
+                addr = start - offset
+                try:
+                    rr = client.read_holding_registers(address=addr, count=count, device_id=slave_id)
+                    if not rr.isError():
+                        for i, v in enumerate(rr.registers):
+                            regmap[start + i] = v
+                        continue
+                except Exception:
+                    pass
+                for sub in range(start, start + count, 10):
+                    sub_count = min(10, start + count - sub)
+                    try:
+                        rr = client.read_holding_registers(address=sub - offset, count=sub_count, device_id=slave_id)
+                        if not rr.isError():
+                            for i, v in enumerate(rr.registers):
+                                regmap[sub + i] = v
+                    except Exception:
+                        pass
+            dump_storage_registers(regmap)
+            return
+
         values, skipped = None, []
 
         for attempt in range(MAX_POLL_ATTEMPTS):
@@ -983,6 +1220,8 @@ def main():
             exp = cfg["expected_serial"]
             if args.format == "prometheus":
                 print(serial_error_prometheus(exp, read_serial, cfg["brand"]))
+            elif args.format == "json":
+                print(json.dumps({"error": "serial_mismatch", "expected": exp, "read": read_serial}))
             else:
                 print(serial_error_human(exp, read_serial))
             sys.exit(2)
@@ -999,6 +1238,12 @@ def main():
         ctx = build_context(values, cfg)
         if args.format == "human" and skipped:
             ctx["_skipped"] = skipped
+
+        tou_regmap = read_tou_registers(client, cfg)
+        ctx["tou"] = decode_tou(tou_regmap)
+
+        storage_regmap = read_storage_registers(client, cfg)
+        ctx["storage"] = decode_storage(storage_regmap)
 
         render(args.format, ctx, solis_specific=not args.no_solis_specific)
 

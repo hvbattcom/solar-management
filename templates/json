@@ -1,0 +1,104 @@
+{
+  "inverter": {
+    "brand": {{ brand | jv }},
+    "serial": {{ serial | jv }},
+    "status": {{ status | jv }},
+    "status_code": {{ status_code_int | jv }},
+    "rated_power_w": {{ inverter_rated_power_w | jv }},
+    "mppt_count": {{ mppt_count | jv }},
+    "temperature_c": {{ inverter_temperature_c | jv }},
+    "battery_temperature_c": {{ battery_temperature_c | jv }},
+    "grid_frequency_hz": {{ grid_frequency_hz | jv }}
+  },
+  "pv": {
+    "total_power_w": {{ pv_total_power_w | jv }},
+    "strings": [
+{% for s in pv_strings %}      {"name": {{ s.name | jv }}, "voltage_v": {{ s.voltage | jv }}, "current_a": {{ s.current | jv }}, "power_w": {{ s.power | jv }}}{{ "," if not loop.last }}
+{% endfor %}    ]
+  },
+  "inverter_output": {
+    "active_power_w": {{ inverter_active_power_w | jv }},
+    "output_pct": {{ inverter_output_pct | jv }},
+    "power_factor": {{ inverter_power_factor_num | jv }},
+    "phases": [
+{% for p in inverter_phases %}      {"name": {{ p.name | jv }}, "voltage_v": {{ p.voltage | jv }}, "current_a": {{ p.current | jv }}, "power_w": {{ p.power | jv }}, "load_pct": {{ p.load_pct | jv }}}{{ "," if not loop.last }}
+{% endfor %}    ]
+  },
+  "grid": {
+    "total_power_w": {{ grid_power_w | jv }},
+    "power_pct": {{ grid_power_pct | jv }},
+    "phases": [
+{% for p in grid_phases %}      {"name": {{ p.name | jv }}, "voltage_v": {{ p.voltage | jv }}, "current_a": {{ p.current | jv }}, "power_w": {{ p.power | jv }}, "power_factor": {{ p.power_factor_num | jv }}, "load_pct": {{ p.load_pct | jv }}}{{ "," if not loop.last }}
+{% endfor %}    ]
+  },
+  "backup": {
+    "total_power_w": {{ backup_load_power_w | jv }},
+    "power_pct": {{ backup_power_pct | jv }},
+    "power_factor": {{ backup_power_factor_num | jv }},
+    "phases": [
+{% for p in backup_phases %}      {"name": {{ p.name | jv }}, "voltage_v": {{ p.voltage | jv }}, "current_a": {{ p.current | jv }}, "power_w": {{ p.power | jv }}, "load_pct": {{ p.load_pct | jv }}}{{ "," if not loop.last }}
+{% endfor %}    ]
+  },
+  "battery": {
+    "voltage_v": {{ battery_voltage_v | jv }},
+    "current_a": {{ battery_current_a | jv }},
+    "power_w": {{ battery_power_w | jv }},
+    "temperature_c": {{ battery_temperature_c | jv }},
+    "soc_pct": {{ battery_soc_pct | jv }},
+    "soh_pct": {{ battery_soh_pct | jv }},
+    "direction": {{ battery_direction | jv }},
+    "bms": {
+      "voltage_v": {{ battery_voltage_bms_v | jv }},
+      "current_a": {{ battery_current_bms_a | jv }},
+      "charge_limit_a": {{ battery_charge_current_limit_bms_a | jv }},
+      "discharge_limit_a": {{ battery_discharge_current_limit_bms_a | jv }}
+    }
+  },
+  "ac_grid_port_power_w": {{ ac_grid_port_power_w | jv }},
+  "household_load_power_w": {{ household_load_power_w | jv }},
+  "energy_today": {
+    "pv_generation_kwh": {{ pv_generation_today_kwh | jv }},
+    "load_consumption_kwh": {{ load_consumption_today_kwh | jv }},
+    "grid_import_kwh": {{ grid_import_today_kwh | jv }},
+    "grid_export_kwh": {{ grid_export_today_kwh | jv }},
+    "battery_charge_kwh": {{ battery_charge_today_kwh | jv }},
+    "battery_discharge_kwh": {{ battery_discharge_today_kwh | jv }},
+    "household_load_kwh": {{ household_load_today_kwh | jv }},
+    "backup_load_kwh": {{ backup_load_today_kwh | jv }}
+  },
+  "energy_total": {
+    "pv_generation_kwh": {{ pv_generation_total_kwh | jv }},
+    "load_consumption_kwh": {{ load_consumption_total_kwh | jv }},
+    "grid_import_kwh": {{ grid_import_total_kwh | jv }},
+    "grid_export_kwh": {{ grid_export_total_kwh | jv }},
+    "battery_charge_kwh": {{ battery_charge_total_kwh | jv }},
+    "battery_discharge_kwh": {{ battery_discharge_total_kwh | jv }},
+    "household_load_kwh": {{ household_load_total_kwh | jv }},
+    "backup_load_kwh": {{ backup_load_total_kwh | jv }}
+  },
+  "faults": {
+    "any_fault": {{ any_fault | jv }},
+    "op_status_raw": {{ op_status_raw | jv }},
+    "op_status_bits": {{ op_status_bits | tojson }},
+    "registers": {
+{% for fkey, fd in fault_data.items() %}      {{ fkey | jv }}: {"name": {{ fd.name | jv }}, "raw": {{ fd.raw | jv }}, "hex": {{ fd.hex | jv }}, "active": {{ fd.active | tojson }}}{{ "," if not loop.last }}
+{% endfor %}    }
+  },
+  "storage": {% if storage is none %}null{% else %}{
+    "mode": {{ storage.mode | jv }},
+    "battery_reserve_on": {{ storage.battery_reserve_on | jv }},
+    "battery_reserve_pct": {{ storage.battery_reserve_pct | jv }},
+    "allow_export": {{ storage.allow_export | jv }},
+    "allow_grid_charge": {{ storage.allow_grid_charge | jv }},
+    "max_export_power_w": {{ storage.max_export_power_w | jv }}
+  }{% endif %},
+  "tou": {% if tou is none %}null{% else %}{
+    "enabled": {{ tou.enabled | jv }},
+    "charge_slots": [
+{% for s in tou.charge_slots %}      {"slot": {{ loop.index }}, "enabled": {{ s.enabled | jv }}, "start": {{ s.start | jv }}, "end": {{ s.end | jv }}, "current_a": {{ s.current_a | jv }}, "cutoff_v": {{ s.cutoff_v | jv }}, "soc_pct": {{ s.soc_pct | jv }}}{{ "," if not loop.last }}
+{% endfor %}    ],
+    "discharge_slots": [
+{% for s in tou.discharge_slots %}      {"slot": {{ loop.index }}, "enabled": {{ s.enabled | jv }}, "start": {{ s.start | jv }}, "end": {{ s.end | jv }}, "current_a": {{ s.current_a | jv }}, "cutoff_v": {{ s.cutoff_v | jv }}, "soc_pct": {{ s.soc_pct | jv }}}{{ "," if not loop.last }}
+{% endfor %}    ]
+  }{% endif %}
+}

@@ -20,3 +20,24 @@ Today:   {{ backup_load_today_kwh }}kWh
 Month:   {{ backup_load_month_kwh }}kWh
 Year:    {{ backup_load_year_kwh }}kWh
 Total:   {{ backup_load_total_kwh }}kWh
+
+=== Storage Settings ===
+{% if storage is none %}Storage settings unavailable
+{% else %}Storage Mode:       {{ storage.mode }}
+Battery Reserve:    {{ "✓" if storage.battery_reserve_on else "✗" }}  {{ storage.battery_reserve_pct }} %
+Allow Export:       {{ "✓" if storage.allow_export else ("✗" if storage.allow_export is not none else "N/A") }}
+Allow Grid Charge:  {{ "✓" if storage.allow_grid_charge else "✗" }}
+Max Export Power:   {{ storage.max_export_power_w }} W
+{% endif %}
+=== Time of Use Programming ===
+{% if tou is none %}TOU data unavailable
+{% else %}TOU Enabled: {{ "✓" if tou.enabled else "✗" }}
+
+Charge Slots:
+| # | En |    Time     | Current |  Cutoff  | SOC % |
+{% for s in tou.charge_slots %}| {{ loop.index }} |  {{ "✓" if s.enabled else " " }} | {{ s.start }}|{{ s.end }} | {{ "%5.1f" | format(s.current_a) }} A | {{ "%6.1f" | format(s.cutoff_v) }} V | {{ "%3d" | format(s.soc_pct) }} % |
+{% endfor %}
+Discharge Slots:
+| # | En |    Time     | Current |  Cutoff  | SOC % |
+{% for s in tou.discharge_slots %}| {{ loop.index }} |  {{ "✓" if s.enabled else " " }} | {{ s.start }}|{{ s.end }} | {{ "%5.1f" | format(s.current_a) }} A | {{ "%6.1f" | format(s.cutoff_v) }} V | {{ "%3d" | format(s.soc_pct) }} % |
+{% endfor %}{% endif %}
