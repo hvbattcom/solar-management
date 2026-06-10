@@ -187,9 +187,9 @@ def write_storage_settings(client: ModbusTcpClient, cfg: dict, fields: dict) -> 
     if "allow_export" in fields:
         current = _read_reg(client, cfg, REG_HYBRID_CTRL)
         if fields["allow_export"]:
-            current |= 1 << 3
-        else:
             current &= ~(1 << 3)
+        else:
+            current |= 1 << 3
         _write_reg(client, cfg, REG_HYBRID_CTRL, current)
 
 
@@ -250,7 +250,7 @@ def read_settings(client: ModbusTcpClient, cfg: dict) -> dict:
         "battery_reserve_on":  bool((mode_mask >> BIT_BATTERY_RESERVE_ON) & 1),
         "battery_reserve_pct": reserve_pct,
         "allow_grid_charge":   bool((mode_mask >> BIT_ALLOW_GRID_CHARGE) & 1),
-        "allow_export":        bool((hybrid_ctrl >> 3) & 1),
+        "allow_export":        not bool((hybrid_ctrl >> 3) & 1),
         "max_export_power_w":  max_export_raw * 100,
     }
 
