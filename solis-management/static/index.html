@@ -590,5 +590,5 @@ async function saveAllSlots(type) {
   else flash(`${type}-msg`, `✗ ${failed.length} slot(s) failed`, 'err');
 }
 
-loadSettings();
+requestAnimationFrame(loadSettings);
 </script>

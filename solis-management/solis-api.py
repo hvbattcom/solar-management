@@ -244,7 +244,7 @@ def read_settings(client: ModbusTcpClient, cfg: dict) -> dict:
     # Block 2: 43483 (1 reg) — hybrid control / allow_export
     hybrid_ctrl = _read_block(client, cfg, REG_HYBRID_CTRL, 1)[0]
 
-    mode = next((name for bit, name in sorted(STORAGE_MODE_BITS.items()) if (mode_mask >> bit) & 1), "Unknown")
+    mode = next((name for bit, name in sorted(STORAGE_MODE_BITS.items(), reverse=True) if (mode_mask >> bit) & 1), "Unknown")
     storage = {
         "mode":                mode,
         "battery_reserve_on":  bool((mode_mask >> BIT_BATTERY_RESERVE_ON) & 1),
