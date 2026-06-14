@@ -23,3 +23,8 @@ mppt_count = 4
 # default_sanity_ranges.cfg is loaded first; any key set here overrides it
 # Example: uncomment to accept all-zero grid readings when grid is physically off
 # zeros_ok_grid = true
+
+[SolisAPI]
+# Bind address and port for solis-api.py (also used by dispatch.py to reach it)
+host = 0.0.0.0
+port = 5000
