@@ -7,6 +7,48 @@ Companion to `solis-monitor/` (the read-only poller). Shares the same `config.cf
 
 ---
 
+## dispatch.py — Solar plan dispatcher
+
+Runs every 5 minutes via cron on the inverter host. Reads today's dispatch map (written
+by the solar planner) and configures Solis S6 TOU discharge slots 5 and 6.
+
+```cron
+*/5 * * * * /usr/bin/python3 /path/to/dispatch.py >> /var/log/solar_dispatch.log 2>&1
+```
+
+Options:
+```
+--config PATH   path to config.cfg (default: ../solis-monitor/config.cfg)
+--dry-run       print actions without writing to inverter
+--time HH:MM    override current time (for testing)
+```
+
+**Config** (`[SolisAPI]` section of `config.cfg`):
+
+```ini
+port = 5000                                    # solis-api port
+mothership_prometheus_api = http://10.100.0.1/ # Prometheus for live SoC (optional)
+```
+
+**SoC floor guard**: during sell windows, reads `battery_soc_pct` from Prometheus.
+If live SoC ≤ the segment's planned floor, disables the active TOU slot cleanly
+before the firmware floor fires (which would cause grid import). Requires
+`mothership_prometheus_api` to be set; silently skipped if absent.
+
+**State file** (`dispatch_state.json`):
+
+```json
+{
+  "date": "2026-06-15",
+  "applied_at": "2026-06-15T19:20:01",
+  "allow_export": true,
+  "soc_disabled": ["21:30"],
+  "slots": {"5": {"start":"19:15","end":"22:00",...}, "6": null}
+}
+```
+
+---
+
 ## Quick start
 
 ```bash

@@ -20,6 +20,7 @@ import json
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -64,12 +65,15 @@ def load_config(path: Path) -> dict:
     cfg.read(str(path))
     sec = cfg["SolisInverter"]
     use_zb = sec.get("use_zero_based_addressing", "false").strip().lower() == "true"
+    srv = cfg["SolisAPI"] if "SolisAPI" in cfg else {}
     return {
-        "ip":           sec["inverter_ip"].strip(),
-        "port":         int(sec.get("inverter_port", 502)),
-        "slave_id":     int(sec.get("slave_id", 1)),
+        "ip":             sec["inverter_ip"].strip(),
+        "port":           int(sec.get("inverter_port", 502)),
+        "slave_id":       int(sec.get("slave_id", 1)),
         "use_zero_based": use_zb,
         "monitor_script": str(Path(__file__).resolve().parent.parent / "solis-monitor" / "solis-monitor.py"),
+        "server_host":    srv.get("host", "127.0.0.1").strip(),
+        "server_port":    int(srv.get("port", 5000)),
     }
 
 # ── Modbus helpers ────────────────────────────────────────────────────────────
@@ -288,7 +292,9 @@ def read_settings(client: ModbusTcpClient, cfg: dict) -> dict:
 
 # ── Flask application ─────────────────────────────────────────────────────────
 
-_STATIC = Path(__file__).resolve().parent / "static"
+_STATIC   = Path(__file__).resolve().parent / "static"
+_MAPS_DIR = Path(__file__).resolve().parent / "maps"
+_MAPS_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__, static_folder=str(_STATIC), static_url_path="/static")
 _cfg: dict = {}   # populated at startup
@@ -372,6 +378,45 @@ def api_post_tou(slot_type: str, slot_num: int):
     except Exception as exc:
         return _err(str(exc), 502)
 
+# ── Dispatch map endpoints ────────────────────────────────────────────────────
+
+@app.post("/api/map")
+def api_map_receive():
+    """Receive a dispatch map from the solar planner and store it locally."""
+    data = request.get_json(silent=True)
+    if not data or "date" not in data or "instance_id" not in data:
+        return _err("JSON body with 'date' and 'instance_id' required")
+    path = _MAPS_DIR / f"map_{data['date']}_{data['instance_id']}.json"
+    path.write_text(json.dumps(data, indent=2))
+    print(f"[map] received {path.name} ({len(data.get('segments', []))} segments)", flush=True)
+    return _ok()
+
+
+@app.get("/api/map/current")
+def api_map_current():
+    """Return the current 15-min slot from today's dispatch map."""
+    instance_id = request.args.get("instance_id", "")
+    today = datetime.now().strftime("%Y-%m-%d")
+    path  = _MAPS_DIR / f"map_{today}_{instance_id}.json"
+    if not path.exists():
+        # Fall back to most recent map for this instance
+        candidates = sorted(_MAPS_DIR.glob(f"map_*_{instance_id}.json"),
+                             key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            return jsonify({"error": "no map found"}), 404
+        path = candidates[0]
+    data     = json.loads(path.read_text())
+    now      = datetime.now()
+    now_min  = now.hour * 60 + now.minute
+    segments = data.get("segments", [])
+    current  = next((s for s in segments
+                     if int(s["start"][:2]) * 60 + int(s["start"][3:]) <= now_min
+                     <  int(s["end"][:2])   * 60 + int(s["end"][3:])),   None)
+    if current is None:
+        return jsonify({"error": "no segment for current time"}), 404
+    return jsonify({**current, "map_date": data.get("date"), "map_algo": data.get("algo")})
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -389,8 +434,10 @@ def main():
     except Exception as exc:
         sys.exit(f"Config error: {exc}")
 
+    host = args.host if args.host != "127.0.0.1" else _cfg["server_host"]
+    port = args.port if args.port != 5000       else _cfg["server_port"]
     print(f"Solis API → {_cfg['ip']}:{_cfg['port']}  (slave {_cfg['slave_id']})", flush=True)
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    app.run(host=host, port=port, debug=args.debug)
 
 if __name__ == "__main__":
     main()
