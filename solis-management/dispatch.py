@@ -3,14 +3,17 @@
 dispatch.py — 5-minute cron dispatcher for solar plan execution.
 
 Reads the latest dispatch map (written by solar-planner) and configures the
-inverter via the local solis-api.  State is tracked per TOU slot so only
-completed slots are reconfigured; active slots are left untouched.
+inverter via the local solis-api.  Firmware state is read on every run via
+GET /api/settings — no stale state_slots, no window conflicts.
 
-TOU discharge slots used: 5 and 6 (sell_batt windows, in order).
+TOU discharge slots used: all 6.
 
 Behaviour per run:
-  • Determine which TOU slots are still active (window not yet ended)
-  • Assign the next uncovered sell_batt windows to the free (completed) slots
+  • Read actual firmware TOU state (all 6 discharge slots + allow_export)
+  • Determine which slots are actively running (enabled, window not yet ended)
+  • Assign the next uncovered sell_batt windows to free slots
+  • Compare desired vs firmware — update only slots that differ
+  • Disables are sent first (with zeroed times) to prevent overlap conflicts
   • Skip if nothing changed
   • On HTTP failure → retry once; if still failing, exit without saving state
     (next cron run retries automatically)
@@ -64,7 +67,7 @@ def _setup_logging() -> logging.Logger:
 
 log = _setup_logging()
 
-_TOU_SLOTS = [5, 6]   # TOU discharge slots used for sell_batt windows
+_TOU_SLOTS = [1, 2, 3, 4, 5, 6]   # all TOU discharge slots
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -120,7 +123,7 @@ def _current_segment(dispatch_map: dict, now_minutes: int) -> dict | None:
     return None
 
 
-# ── State ─────────────────────────────────────────────────────────────────────
+# ── State (soc_disabled only — slot state read live from firmware) ─────────────
 
 def load_state() -> dict:
     if _STATE_FILE.exists():
@@ -128,41 +131,65 @@ def load_state() -> dict:
     return {}
 
 
-def save_state(map_date: str, slots: dict, allow_export: bool = False,
-               soc_disabled: list | None = None) -> None:
+def save_state(map_date: str, soc_disabled: list | None = None) -> None:
     _STATE_FILE.write_text(json.dumps({
         "date":         map_date,
-        "applied_at":   datetime.now().isoformat(timespec="seconds"),
-        "allow_export": allow_export,
+        "saved_at":     datetime.now().isoformat(timespec="seconds"),
         "soc_disabled": soc_disabled or [],
-        "slots":        slots,
     }))
 
 
-# ── Slot tracking ─────────────────────────────────────────────────────────────
+# ── Firmware state ────────────────────────────────────────────────────────────
 
-def _compute_updates(dispatch_map: dict, state_slots: dict, now_minutes: int,
+def _read_fw_state(mgmt_url: str) -> tuple[list, bool | None]:
+    """
+    Read live TOU discharge slot state and allow_export from the inverter.
+    Returns (fw_slots, fw_allow_export).
+    fw_slots is a list of dicts: {slot, enabled, start, end, soc_pct, ...}
+    Returns ([], None) on failure — caller treats None as "unknown, force update".
+    """
+    url = f"{mgmt_url}/api/settings"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
+        tou       = data.get("tou") or {}
+        fw_slots  = tou.get("discharge_slots", [])
+        fw_export = (data.get("storage") or {}).get("allow_export")
+        log.debug("firmware: %d discharge slots read, allow_export=%s", len(fw_slots), fw_export)
+        for fw in fw_slots:
+            log.debug("  fw slot %s: enabled=%s  %s–%s  soc=%s",
+                      fw.get("slot"), fw.get("enabled"),
+                      fw.get("start"), fw.get("end"), fw.get("soc_pct"))
+        return fw_slots, fw_export
+    except Exception as e:
+        log.warning("could not read firmware state: %s", e)
+        return [], None
+
+
+# ── Slot assignment ───────────────────────────────────────────────────────────
+
+def _compute_updates(dispatch_map: dict, fw_slots: list, now_minutes: int,
                      soc_disabled: list | None = None) -> dict:
     """
-    Returns {slot_num: seg_or_None} for slots that need reconfiguring.
-    Active slots (window not yet ended) are skipped entirely.
+    Returns {slot_num: seg_or_None} for slots whose firmware state differs from desired.
+    Active firmware slots (enabled, window not yet ended) are left untouched.
     Segments whose start time is in soc_disabled are excluded from assignment.
     """
     soc_disabled = soc_disabled or []
     all_sell = [s for s in dispatch_map.get("segments", [])
                 if s["action"] == "sell_batt"]
 
-    # Slots still actively running (window hasn't ended yet)
-    active: dict[int, dict] = {}
-    for slot_str, seg in state_slots.items():
-        if seg and _tm(seg["end"]) > now_minutes:
-            active[int(slot_str)] = seg
+    # Active firmware slots: enabled AND window currently running (start ≤ now < end).
+    # Slots that are enabled but whose window hasn't started yet are safe to reassign.
+    active_fw: dict[int, dict] = {
+        fw["slot"]: fw for fw in fw_slots
+        if (fw.get("enabled")
+            and _tm(fw.get("start", "00:00")) <= now_minutes
+            < _tm(fw.get("end", "00:00")))
+    }
 
-    # Future sell windows not yet covered by any active slot.
-    # "Covered" means overlapping (not just exact match) — a regenerated plan may shift
-    # the window boundary slightly; an overlapping active slot already handles that period.
-    # Segments disabled due to SoC floor are also excluded.
-    active_segs = list(active.values())
+    # Future sell segments not yet covered by an active fw slot and not SoC-disabled
+    active_segs = list(active_fw.values())
     available = [
         s for s in all_sell
         if _tm(s["end"]) > now_minutes
@@ -173,16 +200,34 @@ def _compute_updates(dispatch_map: dict, state_slots: dict, now_minutes: int,
         )
     ]
 
-    # Free slots (completed or never used) get new assignments
-    free_slots = sorted(s for s in _TOU_SLOTS if s not in active)
-    updates = {}
+    # Free slots (disabled or window already ended)
+    free_slots = sorted(fw["slot"] for fw in fw_slots if fw["slot"] not in active_fw)
+
+    updates: dict[int, dict | None] = {}
     for i, slot_num in enumerate(free_slots):
         new_seg = available[i] if i < len(available) else None
-        cur_seg = state_slots.get(str(slot_num))
-        cur_key = (cur_seg["start"], cur_seg["end"]) if cur_seg else None
-        new_key = (new_seg["start"], new_seg["end"]) if new_seg else None
-        if new_key != cur_key:
+        cur_fw  = next((fw for fw in fw_slots if fw["slot"] == slot_num), {})
+
+        # Build comparable keys
+        if new_seg:
+            desired = (True,  _tou_time(new_seg["start"]), _tou_time(new_seg["end"]),
+                       new_seg.get("soc_floor_pct", 15))
+        else:
+            desired = (False, "00:00", "00:00", None)
+
+        fw_enabled = bool(cur_fw.get("enabled"))
+        current = (fw_enabled,
+                   cur_fw.get("start", "00:00"),
+                   cur_fw.get("end",   "00:00"),
+                   cur_fw.get("soc_pct") if fw_enabled else None)
+
+        log.debug("  slot %d: desired=%s  current=%s  diff=%s",
+                  slot_num, desired, current, desired != current)
+        if desired != current:
             updates[slot_num] = new_seg
+
+    log.debug("compute_updates → %s", {k: (v["start"] + "–" + v["end"] if v else "off")
+                                        for k, v in updates.items()})
     return updates
 
 
@@ -232,7 +277,7 @@ def _get_soc(prom_url: str) -> int | None:
         log.warning("Prometheus returned no result for battery_soc_pct")
         return None
     except Exception as e:
-        log.warning("could not read SoC from Prometheus (%s): %s", url, e)
+        log.info("SoC guard skipped — Prometheus unreachable (%s): %s", url, e)
         return None
 
 
@@ -244,20 +289,27 @@ def apply_plan(mgmt_url: str, updates: dict, any_sell: bool,
     if any_sell and max_export_w > 0:
         storage_body["max_export_power_w"] = max_export_w
     _post_with_retry(f"{mgmt_url}/api/settings/storage", storage_body, dry_run)
+
+    if not updates:
+        return
+
+    # Build batch payload for /api/settings/tou/discharge/all
+    # One atomic write: all slot register data in one FC16, bitmask in one RMW → no overlap conflicts
+    batch: list[dict] = []
     for slot_num, seg in sorted(updates.items()):
         if seg is None:
             log.info("  slot %d: disabled", slot_num)
-            _post_with_retry(f"{mgmt_url}/api/settings/tou/discharge/{slot_num}",
-                             {"enabled": False}, dry_run)
+            batch.append({"slot": slot_num, "enabled": False,
+                          "start": "00:00", "end": "00:00"})
         else:
             log.info("  slot %d: %s–%s  floor=%d%%",
                      slot_num, seg["start"], seg["end"], seg.get("soc_floor_pct", 15))
-            _post_with_retry(f"{mgmt_url}/api/settings/tou/discharge/{slot_num}", {
-                "enabled": True,
-                "start":   _tou_time(seg["start"]),
-                "end":     _tou_time(seg["end"]),
-                "soc_pct": seg.get("soc_floor_pct", 15),
-            }, dry_run)
+            batch.append({"slot": slot_num, "enabled": True,
+                          "start":   _tou_time(seg["start"]),
+                          "end":     _tou_time(seg["end"]),
+                          "soc_pct": seg.get("soc_floor_pct", 15)})
+
+    _post_with_retry(f"{mgmt_url}/api/settings/tou/discharge/all", batch, dry_run)
     log.info("apply: done (%d slot(s) updated)", len(updates))
 
 
@@ -285,75 +337,85 @@ def main():
         _now = datetime.now()
         now_minutes = _now.hour * 60 + _now.minute
 
-    state       = load_state()
-    state_today = state.get("date") == today
-    state_slots = (state.get("slots") or {str(s): None for s in _TOU_SLOTS}
-                   if state_today
-                   else {str(s): None for s in _TOU_SLOTS})
+    # ── Read firmware state (source of truth for slots + allow_export) ─────────
+    fw_slots, fw_allow_export = _read_fw_state(cfg["management_url"])
+
+    # ── Load soc_disabled from state file (the only thing we persist) ──────────
+    state        = load_state()
+    state_today  = state.get("date") == today
     soc_disabled: list = (state.get("soc_disabled") or []) if state_today else []
 
-    # ── allow_export: track independently of slot changes ─────────────────────
-    # Desired state comes from the current time's segment in the dispatch map.
-    # Hold / charge periods → False; sell_batt / sell_solar periods → True.
+    # ── allow_export: desired vs firmware ─────────────────────────────────────
     cur_seg        = _current_segment(dispatch_map, now_minutes)
     desired_export = cur_seg is not None and cur_seg["action"] in ("sell_batt", "sell_solar")
-    # None means "unknown / first run today" — treat as changed so we always
-    # apply the correct state on the first run after midnight or a restart.
-    last_export    = state.get("allow_export") if state_today else None
-    export_changed = desired_export != last_export
+
+    # If plan was regenerated and shifted the sell window, but an fw slot is still
+    # actively running, keep allow_export True — the inverter is still selling.
+    if not desired_export:
+        for fw in fw_slots:
+            if (fw.get("enabled")
+                    and _tm(fw.get("start", "00:00")) <= now_minutes
+                    < _tm(fw.get("end", "00:00"))):
+                desired_export = True
+                break
+
+    # fw_allow_export=None means we couldn't read firmware — treat as changed
+    export_changed = (fw_allow_export is None) or (desired_export != fw_allow_export)
 
     # ── SoC floor guard ───────────────────────────────────────────────────────
-    # During sell_batt windows, read live SoC from Prometheus every 5 min.
-    # If SoC has reached the planned floor, proactively disable the TOU slot
-    # before the firmware floor triggers (which would cause grid import).
     soc_triggered = False
     if (cfg.get("prom_url") and cur_seg and cur_seg["action"] == "sell_batt"
             and cur_seg["start"] not in soc_disabled):
         live_soc = _get_soc(cfg["prom_url"])
         if live_soc is not None and live_soc <= cur_seg["soc_floor_pct"]:
             log.warning(
-                "SoC %d%% ≤ floor %d%% for segment %s–%s — disabling TOU slots",
+                "SoC %d%% ≤ floor %d%% for segment %s–%s — disabling active TOU slot(s)",
                 live_soc, cur_seg["soc_floor_pct"],
                 cur_seg["start"], cur_seg["end"],
             )
-            for slot_str, seg in list(state_slots.items()):
-                if seg and _tm(seg["start"]) <= now_minutes < _tm(seg["end"]):
+            for fw in fw_slots:
+                if (fw.get("enabled")
+                        and _tm(fw.get("start", "00:00")) <= now_minutes
+                        < _tm(fw.get("end", "00:00"))):
+                    slot_num = fw["slot"]
                     try:
                         _post_with_retry(
-                            f"{cfg['management_url']}/api/settings/tou/discharge/{slot_str}",
-                            {"enabled": False}, args.dry_run,
+                            f"{cfg['management_url']}/api/settings/tou/discharge/{slot_num}",
+                            {"enabled": False, "start": "00:00", "end": "00:00"},
+                            args.dry_run,
                         )
-                        log.info("  slot %s disabled (SoC floor)", slot_str)
-                        state_slots[slot_str] = None
+                        log.info("  slot %d disabled (SoC floor)", slot_num)
+                        # Patch fw_slots so _compute_updates sees this slot as free
+                        fw["enabled"] = False
+                        fw["start"]   = "00:00"
+                        fw["end"]     = "00:00"
                     except Exception as e:
-                        log.error("could not disable slot %s: %s", slot_str, e)
+                        log.error("could not disable slot %d: %s", slot_num, e)
             soc_disabled.append(cur_seg["start"])
             desired_export = False
-            export_changed = desired_export != last_export
+            export_changed = True
             soc_triggered  = True
 
     # ── TOU slot assignments ───────────────────────────────────────────────────
-    updates = _compute_updates(dispatch_map, state_slots, now_minutes, soc_disabled)
+    updates = _compute_updates(dispatch_map, fw_slots, now_minutes, soc_disabled)
 
     if not updates and not export_changed and not soc_triggered:
         log.info("all slots up to date — skipping")
         return
 
-    new_slots = {**state_slots, **{str(k): v for k, v in updates.items()}}
-
-    # Max export power: prefer the currently-active segment's value; fall back
-    # to any configured future slot (for when we're in a hold period but have
-    # sell slots already programmed).
+    # Max export power: from current segment or first upcoming sell segment
     if desired_export and cur_seg and cur_seg.get("sell_kw"):
         sell_kw = cur_seg["sell_kw"]
     else:
-        sell_kw = next((seg["sell_kw"] for seg in new_slots.values() if seg), 0.0)
+        upcoming = [s for s in dispatch_map.get("segments", [])
+                    if s["action"] == "sell_batt" and _tm(s["end"]) > now_minutes]
+        sell_kw = upcoming[0]["sell_kw"] if upcoming else 0.0
     max_export_w = int(round(sell_kw * 1000 / 100) * 100)
 
     if export_changed:
         action_str = cur_seg["action"] if cur_seg else "hold"
         log.info("allow_export: %s → %s  (current segment: %s)",
-                 last_export, desired_export, action_str)
+                 fw_allow_export, desired_export, action_str)
     if updates:
         log.info("updating %d slot(s): %s", len(updates),
                  ", ".join(
@@ -371,9 +433,8 @@ def main():
         sys.exit(1)
 
     if not args.dry_run:
-        save_state(today, new_slots, allow_export=desired_export, soc_disabled=soc_disabled)
-        log.info("state saved  slots=%s  allow_export=%s  soc_disabled=%s",
-                 new_slots, desired_export, soc_disabled)
+        save_state(today, soc_disabled=soc_disabled)
+        log.info("state saved  soc_disabled=%s", soc_disabled)
 
 
 if __name__ == "__main__":
