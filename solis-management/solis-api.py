@@ -197,6 +197,50 @@ def write_storage_settings(client: ModbusTcpClient, cfg: dict, fields: dict) -> 
         _write_reg(client, cfg, REG_HYBRID_CTRL, current)
 
 
+def write_all_discharge_slots(client: ModbusTcpClient, cfg: dict, slot_updates: list) -> None:
+    """
+    Write multiple discharge slots atomically: one 42-reg block write + one bitmask RMW.
+    slot_updates: list of dicts with 'slot' (1-6) plus any of the usual TOU fields.
+    Only slots listed are changed; others keep their existing register values.
+    """
+    # Read all 6 discharge slot registers at once (43750–43791, 42 regs)
+    blk = list(_read_block(client, cfg, REG_TOU_DISCHARGE_BASE, 6 * TOU_SLOT_FIELDS))
+
+    # Apply each slot's updates into the block
+    for fields in slot_updates:
+        n    = int(fields["slot"])
+        off  = (n - 1) * TOU_SLOT_FIELDS   # offset within the 42-reg block
+        ex   = blk[off:off + TOU_SLOT_FIELDS]   # [soc_pct, current×10, cutoff×10, s_h, s_m, e_h, e_m]
+        blk[off + 0] = int(fields["soc_pct"])                                           if "soc_pct"   in fields else ex[0]
+        blk[off + 1] = round(float(fields["current_a"]) * TOU_CURRENT_SCALE)            if "current_a" in fields else ex[1]
+        blk[off + 2] = round(float(fields["cutoff_v"])  * TOU_VOLTAGE_SCALE)            if "cutoff_v"  in fields else ex[2]
+        if "start" in fields:
+            sh, sm = _parse_time(fields["start"])
+            blk[off + 3], blk[off + 4] = sh, sm
+        else:
+            blk[off + 3], blk[off + 4] = ex[3], ex[4]
+        if "end" in fields:
+            eh, em = _parse_time(fields["end"])
+            blk[off + 5], blk[off + 6] = eh, em
+        else:
+            blk[off + 5], blk[off + 6] = ex[5], ex[6]
+
+    # Write all 42 registers in one FC16 call — no overlap window possible
+    _write_regs(client, cfg, REG_TOU_DISCHARGE_BASE, blk)
+
+    # Update enable bitmask (bits 6-11 = discharge slots 1-6) in one RMW
+    enable_updates = [(int(f["slot"]), bool(f["enabled"])) for f in slot_updates if "enabled" in f]
+    if enable_updates:
+        switch = _read_reg(client, cfg, REG_TOU_SWITCH)
+        for slot_num, enabled in enable_updates:
+            bit = 6 + slot_num - 1
+            if enabled:
+                switch |= 1 << bit
+            else:
+                switch &= ~(1 << bit)
+        _write_reg(client, cfg, REG_TOU_SWITCH, switch)
+
+
 def write_tou_slot(client: ModbusTcpClient, cfg: dict, slot_type: str, slot_num: int, fields: dict) -> None:
     """
     Update a single TOU slot. slot_type: 'charge' or 'discharge'. slot_num: 1-6.
@@ -354,6 +398,32 @@ def api_post_storage():
         return _ok()
     except Exception as exc:
         return _err(str(exc), 502)
+
+@app.post("/api/settings/tou/discharge/all")
+def api_post_discharge_all():
+    """Update multiple discharge slots in one Modbus transaction. Body: [{slot, enabled?, start?, end?, soc_pct?, ...}, ...]"""
+    slot_updates = request.get_json(silent=True)
+    if not isinstance(slot_updates, list) or not slot_updates:
+        return _err("JSON array of slot objects required")
+    for item in slot_updates:
+        if not isinstance(item, dict) or "slot" not in item:
+            return _err("each item must have a 'slot' field")
+        if not 1 <= int(item["slot"]) <= 6:
+            return _err(f"slot must be 1-6, got {item['slot']}")
+        try:
+            _validate_tou_slot(item)
+        except ValueError as exc:
+            return _err(str(exc))
+    try:
+        client = _modbus_connect(_cfg)
+        try:
+            write_all_discharge_slots(client, _cfg, slot_updates)
+        finally:
+            client.close()
+        return _ok()
+    except Exception as exc:
+        return _err(str(exc), 502)
+
 
 @app.post("/api/settings/tou/<slot_type>/<int:slot_num>")
 def api_post_tou(slot_type: str, slot_num: int):
