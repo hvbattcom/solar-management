@@ -261,20 +261,22 @@ def _post_with_retry(url: str, body: dict, dry_run: bool) -> dict:
 
 # ── SoC reading ───────────────────────────────────────────────────────────────
 
-def _get_soc(prom_url: str) -> int | None:
+def _get_soc(prom_url: str, instance_id: str = "") -> int | None:
     """Return live battery SoC % from Prometheus instant query (~100ms). None on failure."""
     import urllib.parse
-    query = urllib.parse.urlencode({"query": "battery_soc_pct"})
-    url   = f"{prom_url}/api/v1/query?{query}"
+    prom_query = "battery_soc_pct"
+    if instance_id:
+        prom_query = f'battery_soc_pct{{instance_id="{instance_id}"}}'
+    url = f"{prom_url}/api/v1/query?" + urllib.parse.urlencode({"query": prom_query})
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
             data = json.loads(r.read())
         result = data.get("data", {}).get("result", [])
         if result:
             soc = int(float(result[0]["value"][1]))
-            log.debug("live SoC from Prometheus: %d%%", soc)
+            log.debug("live SoC from Prometheus (%s): %d%%", instance_id or "any", soc)
             return soc
-        log.warning("Prometheus returned no result for battery_soc_pct")
+        log.warning("Prometheus returned no result for %s", prom_query)
         return None
     except Exception as e:
         log.info("SoC guard skipped — Prometheus unreachable (%s): %s", url, e)
@@ -325,6 +327,7 @@ def main():
     cfg          = load_config(Path(args.config))
     dispatch_map = load_map()
     map_date     = dispatch_map.get("date", "?")
+    instance_id  = dispatch_map.get("instance_id", "")
     today        = date.today().isoformat()
 
     if map_date != today:
@@ -366,7 +369,7 @@ def main():
     soc_triggered = False
     if (cfg.get("prom_url") and cur_seg and cur_seg["action"] == "sell_batt"
             and cur_seg["start"] not in soc_disabled):
-        live_soc = _get_soc(cfg["prom_url"])
+        live_soc = _get_soc(cfg["prom_url"], instance_id)
         if live_soc is not None and live_soc <= cur_seg["soc_floor_pct"]:
             log.warning(
                 "SoC %d%% ≤ floor %d%% for segment %s–%s — disabling active TOU slot(s)",
