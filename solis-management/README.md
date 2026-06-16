@@ -10,7 +10,7 @@ Companion to `solis-monitor/` (the read-only poller). Shares the same `config.cf
 ## dispatch.py — Solar plan dispatcher
 
 Runs every 5 minutes via cron on the inverter host. Reads today's dispatch map (written
-by the solar planner) and configures Solis S6 TOU discharge slots 5 and 6.
+by the solar planner) and configures all 6 Solis S6 TOU discharge slots.
 
 ```cron
 */5 * * * * /usr/bin/python3 /path/to/dispatch.py >> /var/log/solar_dispatch.log 2>&1
@@ -28,24 +28,54 @@ Options:
 ```ini
 port = 5000                                    # solis-api port
 mothership_prometheus_api = http://10.100.0.1/ # Prometheus for live SoC (optional)
+management_url = http://localhost:5000          # solis-api base URL
 ```
 
-**SoC floor guard**: during sell windows, reads `battery_soc_pct` from Prometheus.
-If live SoC ≤ the segment's planned floor, disables the active TOU slot cleanly
-before the firmware floor fires (which would cause grid import). Requires
-`mothership_prometheus_api` to be set; silently skipped if absent.
+**Auto-managed gate** — First thing each run: queries `GET /api/auto-managed`. If the toggle
+is OFF, dispatcher exits immediately without reading firmware or making any changes. This lets
+you take manual control of the inverter from the web UI.
+
+**Sliding-window slot recycling** — The firmware has 6 TOU discharge slots; a daily plan can
+have more than 6 sell segments. The dispatcher fills slots 1-6 with the first 6 upcoming
+segments. When a slot's window ends it is immediately recycled to the next deferred segment —
+one write per transition, no cascade across other slots. Plans with ≤ 6 sell windows are
+unaffected.
+
+**Sticky no-write** — A SHA-1 of the map is stored in `dispatch_state.json`. If the plan
+hasn't changed and no slot has expired, the run exits with "all slots up to date — skipping"
+and makes zero firmware writes.
+
+**`X-Dispatcher: 1` header** — All POST requests from `dispatch.py` carry this header so the
+solis-api can distinguish dispatcher calls from manual/UI calls when auto-management is ON.
+
+**SoC floor guard** — During `sell_batt` windows, reads `battery_soc_pct` from Prometheus.
+If live SoC ≤ the segment's `soc_floor_pct`, disables the active TOU slot cleanly before
+the firmware floor fires (which would cause grid import). Requires `mothership_prometheus_api`;
+silently skipped if absent.
+
+**Retry on failure** — HTTP calls retry once; on second failure exits without saving state so
+the next cron run retries automatically.
 
 **State file** (`dispatch_state.json`):
 
 ```json
 {
-  "date": "2026-06-15",
-  "applied_at": "2026-06-15T19:20:01",
-  "allow_export": true,
-  "soc_disabled": ["21:30"],
-  "slots": {"5": {"start":"19:15","end":"22:00",...}, "6": null}
+  "date": "2026-06-17",
+  "plan_hash": "25d46c5550ad",
+  "slot_assignment": {
+    "1": {"start": "07:30", "end": "08:00", "action": "sell_solar", ...},
+    "2": {"start": "08:00", "end": "08:15", "action": "sell_batt",  ...},
+    "3": {"start": "08:15", "end": "10:45", "action": "sell_solar", ...},
+    "4": {"start": "16:30", "end": "19:15", "action": "sell_solar", ...},
+    "5": {"start": "19:15", "end": "22:00", "action": "sell_batt",  ...},
+    "6": {"start": "22:15", "end": "23:15", "action": "sell_batt",  ...}
+  },
+  "soc_disabled": ["21:30"]
 }
 ```
+
+When a plan has > 6 sell segments, some slots will initially be `null` (deferred) and will
+be filled in as earlier slots expire during the day.
 
 ---
 
@@ -74,6 +104,10 @@ For LAN access: `python3 solis-api.py --host 0.0.0.0`
 
 The UI at `/` lets you read and write all settings without curl:
 
+- **Automatically managed toggle** (iOS-style switch, top of page) — when ON, the dispatcher
+  controls the inverter; the rest of the page is greyed out and a banner is shown. Manual edits
+  are blocked at the API level (the dispatcher bypasses this via `X-Dispatcher: 1`). The toggle
+  auto-refreshes the page every 30 seconds while active. State is persisted in `auto_managed.json`.
 - **Storage Settings** — mode selector, export limit, battery reserve, toggles for allow-export / allow-grid-charge / reserve-switch
 - **TOU Charge Slots** — table with enable checkbox, time range, current, cutoff voltage, SOC target; per-row Save
 - **TOU Discharge Slots** — same layout
@@ -87,6 +121,38 @@ Changes take effect immediately; the UI re-reads settings after each successful 
 ## API Reference
 
 All write endpoints accept a JSON body with any subset of fields — only fields present are changed, others are left as-is (read-modify-write on bitmask registers).
+
+> **Auto-managed guard**: when auto-management is ON, write endpoints return HTTP 403 unless the
+> request carries `X-Dispatcher: 1`. Read endpoints (`GET`) are always unrestricted.
+
+### `GET /api/auto-managed`
+
+Returns the current auto-managed state.
+
+```json
+{"enabled": true}
+```
+
+### `POST /api/auto-managed`
+
+Set the auto-managed toggle. Body: `{"enabled": true}` or `{"enabled": false}`.
+
+When `enabled` is `true`, all write endpoints (`/api/settings/storage`,
+`/api/settings/tou/discharge/<N>`, `/api/discharge_all`) return HTTP 403 for requests
+that do not carry the `X-Dispatcher: 1` header. The dispatcher always sends this header,
+so its writes are unaffected.
+
+```bash
+# Enable auto-management (dispatcher takes over, UI is locked)
+curl -X POST http://localhost:5000/api/auto-managed \
+  -H "Content-Type: application/json" -d '{"enabled": true}'
+
+# Disable (take manual control)
+curl -X POST http://localhost:5000/api/auto-managed \
+  -H "Content-Type: application/json" -d '{"enabled": false}'
+```
+
+---
 
 ### `GET /api/settings`
 

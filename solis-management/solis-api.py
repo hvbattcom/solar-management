@@ -336,8 +336,9 @@ def read_settings(client: ModbusTcpClient, cfg: dict) -> dict:
 
 # ── Flask application ─────────────────────────────────────────────────────────
 
-_STATIC   = Path(__file__).resolve().parent / "static"
-_MAPS_DIR = Path(__file__).resolve().parent / "maps"
+_STATIC    = Path(__file__).resolve().parent / "static"
+_MAPS_DIR  = Path(__file__).resolve().parent / "maps"
+_AUTO_FILE = Path(__file__).resolve().parent / "auto_managed.json"
 _MAPS_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__, static_folder=str(_STATIC), static_url_path="/static")
@@ -380,8 +381,19 @@ def api_get_status():
     except Exception as exc:
         return _err(str(exc), 502)
 
+def _managed_guard():
+    """Return 403 if auto-management is active and the caller is not the dispatcher."""
+    enabled = json.loads(_AUTO_FILE.read_text()).get("enabled", True) if _AUTO_FILE.exists() else True
+    if not enabled:
+        return None
+    if request.headers.get("X-Dispatcher") == "1":
+        return None  # identified as the automated dispatcher — always allowed
+    return _err("auto-management is active — manual writes are blocked", 403)
+
+
 @app.post("/api/settings/storage")
 def api_post_storage():
+    if (g := _managed_guard()): return g
     fields = request.get_json(silent=True) or {}
     if not fields:
         return _err("JSON body required")
@@ -401,6 +413,7 @@ def api_post_storage():
 
 @app.post("/api/settings/tou/discharge/all")
 def api_post_discharge_all():
+    if (g := _managed_guard()): return g
     """Update multiple discharge slots in one Modbus transaction. Body: [{slot, enabled?, start?, end?, soc_pct?, ...}, ...]"""
     slot_updates = request.get_json(silent=True)
     if not isinstance(slot_updates, list) or not slot_updates:
@@ -427,6 +440,7 @@ def api_post_discharge_all():
 
 @app.post("/api/settings/tou/<slot_type>/<int:slot_num>")
 def api_post_tou(slot_type: str, slot_num: int):
+    if (g := _managed_guard()): return g
     if slot_type not in ("charge", "discharge"):
         return _err("slot_type must be 'charge' or 'discharge'")
     if not 1 <= slot_num <= 6:
@@ -485,6 +499,26 @@ def api_map_current():
     if current is None:
         return jsonify({"error": "no segment for current time"}), 404
     return jsonify({**current, "map_date": data.get("date"), "map_algo": data.get("algo")})
+
+
+# ── Auto-managed flag ────────────────────────────────────────────────────────
+
+@app.get("/api/auto-managed")
+def api_get_auto_managed():
+    if _AUTO_FILE.exists():
+        enabled = json.loads(_AUTO_FILE.read_text()).get("enabled", True)
+    else:
+        enabled = True
+    return jsonify({"enabled": enabled})
+
+
+@app.post("/api/auto-managed")
+def api_set_auto_managed():
+    data    = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled", True))
+    _AUTO_FILE.write_text(json.dumps({"enabled": enabled}))
+    print(f"[auto-managed] {'enabled' if enabled else 'disabled'}", flush=True)
+    return _ok()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
