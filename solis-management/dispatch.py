@@ -123,7 +123,7 @@ def _current_segment(dispatch_map: dict, now_minutes: int) -> dict | None:
     return None
 
 
-# ── State (soc_disabled only — slot state read live from firmware) ─────────────
+# ── State ─────────────────────────────────────────────────────────────────────
 
 def load_state() -> dict:
     if _STATE_FILE.exists():
@@ -131,11 +131,14 @@ def load_state() -> dict:
     return {}
 
 
-def save_state(map_date: str, soc_disabled: list | None = None) -> None:
+def save_state(map_date: str, soc_disabled: list | None = None,
+               plan_hash: str = "", slot_assignment: dict | None = None) -> None:
     _STATE_FILE.write_text(json.dumps({
-        "date":         map_date,
-        "saved_at":     datetime.now().isoformat(timespec="seconds"),
-        "soc_disabled": soc_disabled or [],
+        "date":             map_date,
+        "saved_at":         datetime.now().isoformat(timespec="seconds"),
+        "soc_disabled":     soc_disabled or [],
+        "plan_hash":        plan_hash,
+        "slot_assignment":  {str(k): v for k, v in (slot_assignment or {}).items()},
     }))
 
 
@@ -168,63 +171,103 @@ def _read_fw_state(mgmt_url: str) -> tuple[list, bool | None]:
 
 # ── Slot assignment ───────────────────────────────────────────────────────────
 
-def _compute_updates(dispatch_map: dict, fw_slots: list, now_minutes: int,
+def _plan_hash(dispatch_map: dict) -> str:
+    import hashlib
+    return hashlib.sha1(
+        json.dumps(dispatch_map.get("segments", []), sort_keys=True).encode()
+    ).hexdigest()[:12]
+
+
+def _build_slot_assignment(
+    all_sell: list,
+    now_minutes: int,
+    prev_assignment: dict[int, dict | None] | None = None,
+) -> dict[int, dict | None]:
+    """
+    Sliding-window slot assignment — supports more than 6 sell segments.
+    Slots whose segment has ended are recycled to the next unassigned upcoming segment.
+    """
+    prev = prev_assignment or {}
+
+    # Keep slots whose segment hasn't ended yet (includes currently-running ones)
+    active: dict[int, dict] = {}
+    for slot in _TOU_SLOTS:
+        seg = prev.get(slot)
+        if seg and _tm(seg["end"]) > now_minutes:
+            active[slot] = seg
+
+    # Segments not yet in any active slot and not already past
+    active_keys = {(s["start"], s["end"]) for s in active.values()}
+    unassigned  = [s for s in all_sell
+                   if (s["start"], s["end"]) not in active_keys
+                   and _tm(s["end"]) > now_minutes]
+
+    # Recycle freed slots (ascending slot order) to next upcoming segments
+    free_slots = sorted(s for s in _TOU_SLOTS if s not in active)
+    result: dict[int, dict | None] = dict(active)
+    for slot, seg in zip(free_slots, unassigned):
+        result[slot] = seg
+    for slot in free_slots[len(unassigned):]:
+        result[slot] = None
+    return result
+
+
+def _compute_updates(slot_assignment: dict, fw_slots: list, now_minutes: int,
                      soc_disabled: list | None = None) -> dict:
     """
-    Returns {slot_num: seg_or_None} for slots whose firmware state differs from desired.
-    Active firmware slots (enabled, window not yet ended) are left untouched.
-    Segments whose start time is in soc_disabled are excluded from assignment.
+    Compare desired slot_assignment against live firmware state.
+    Returns {slot_num: seg_or_None} only for slots that actually differ.
+    Slots whose window is currently running are never interrupted — deferred to next run.
     """
     soc_disabled = soc_disabled or []
-    all_sell = [s for s in dispatch_map.get("segments", [])
-                if s["action"] == "sell_batt"]
-
-    # Active firmware slots: enabled AND window currently running (start ≤ now < end).
-    # Slots that are enabled but whose window hasn't started yet are safe to reassign.
-    active_fw: dict[int, dict] = {
-        fw["slot"]: fw for fw in fw_slots
-        if (fw.get("enabled")
-            and _tm(fw.get("start", "00:00")) <= now_minutes
-            < _tm(fw.get("end", "00:00")))
-    }
-
-    # Future sell segments not yet covered by an active fw slot and not SoC-disabled
-    active_segs = list(active_fw.values())
-    available = [
-        s for s in all_sell
-        if _tm(s["end"]) > now_minutes
-        and s["start"] not in soc_disabled
-        and not any(
-            _tm(s["start"]) < _tm(a["end"]) and _tm(a["start"]) < _tm(s["end"])
-            for a in active_segs
-        )
-    ]
-
-    # Free slots (disabled or window already ended)
-    free_slots = sorted(fw["slot"] for fw in fw_slots if fw["slot"] not in active_fw)
-
     updates: dict[int, dict | None] = {}
-    for i, slot_num in enumerate(free_slots):
-        new_seg = available[i] if i < len(available) else None
-        cur_fw  = next((fw for fw in fw_slots if fw["slot"] == slot_num), {})
 
-        # Build comparable keys
-        if new_seg:
-            desired = (True,  _tou_time(new_seg["start"]), _tou_time(new_seg["end"]),
-                       new_seg.get("soc_floor_pct", 15))
-        else:
-            desired = (False, "00:00", "00:00", None)
-
+    for slot_num in _TOU_SLOTS:
+        seg    = slot_assignment.get(slot_num)
+        cur_fw = next((fw for fw in fw_slots if fw["slot"] == slot_num), {})
         fw_enabled = bool(cur_fw.get("enabled"))
-        current = (fw_enabled,
-                   cur_fw.get("start", "00:00"),
-                   cur_fw.get("end",   "00:00"),
-                   cur_fw.get("soc_pct") if fw_enabled else None)
 
-        log.debug("  slot %d: desired=%s  current=%s  diff=%s",
-                  slot_num, desired, current, desired != current)
-        if desired != current:
-            updates[slot_num] = new_seg
+        # Is this slot currently running?
+        is_active = (fw_enabled
+                     and _tm(cur_fw.get("start", "00:00")) <= now_minutes
+                     < _tm(cur_fw.get("end", "00:00")))
+
+        # Effective desired segment (None if SoC-disabled)
+        if seg and seg.get("start") in soc_disabled:
+            seg = None
+
+        # Build comparable 5-tuples (enabled, start, end, soc_pct, current_a)
+        if seg:
+            desired_ca = 0 if seg["action"] == "sell_solar" else seg.get("tou_amps", 100)
+            fw_ca      = round(cur_fw.get("current_a", -1)) if fw_enabled else None
+            desired = (True, _tou_time(seg["start"]), _tou_time(seg["end"]),
+                       seg.get("soc_floor_pct", 15), desired_ca)
+            current = (fw_enabled,
+                       cur_fw.get("start", "00:00"),
+                       cur_fw.get("end",   "00:00"),
+                       cur_fw.get("soc_pct") if fw_enabled else None,
+                       fw_ca)
+        else:
+            desired = (False, "00:00", "00:00", None, None)
+            current = (fw_enabled,
+                       cur_fw.get("start", "00:00"),
+                       cur_fw.get("end",   "00:00"),
+                       cur_fw.get("soc_pct") if fw_enabled else None,
+                       None)
+
+        log.debug("  slot %d: desired=%s  current=%s  diff=%s  active=%s",
+                  slot_num, desired, current, desired != current, is_active)
+
+        if desired == current:
+            continue
+
+        if is_active:
+            # Never interrupt a running window — the content will be corrected next run
+            # once the window ends and the slot becomes free.
+            log.debug("  slot %d: active with changed content — deferring", slot_num)
+            continue
+
+        updates[slot_num] = seg
 
     log.debug("compute_updates → %s", {k: (v["start"] + "–" + v["end"] if v else "off")
                                         for k, v in updates.items()})
@@ -239,7 +282,9 @@ def _post(url: str, body: dict, dry_run: bool) -> dict:
         return {"ok": True}
     data = json.dumps(body).encode()
     req  = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST",
+        url, data=data,
+        headers={"Content-Type": "application/json", "X-Dispatcher": "1"},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -304,12 +349,16 @@ def apply_plan(mgmt_url: str, updates: dict, any_sell: bool,
             batch.append({"slot": slot_num, "enabled": False,
                           "start": "00:00", "end": "00:00"})
         else:
-            log.info("  slot %d: %s–%s  floor=%d%%",
-                     slot_num, seg["start"], seg["end"], seg.get("soc_floor_pct", 15))
+            is_solar = seg["action"] == "sell_solar"
+            ca       = 0 if is_solar else seg.get("tou_amps", 100)
+            log.info("  slot %d: %s–%s  floor=%d%%  %s",
+                     slot_num, seg["start"], seg["end"], seg.get("soc_floor_pct", 15),
+                     f"current=0A (solar only)" if is_solar else f"current={ca}A")
             batch.append({"slot": slot_num, "enabled": True,
-                          "start":   _tou_time(seg["start"]),
-                          "end":     _tou_time(seg["end"]),
-                          "soc_pct": seg.get("soc_floor_pct", 15)})
+                          "start":     _tou_time(seg["start"]),
+                          "end":       _tou_time(seg["end"]),
+                          "soc_pct":   seg.get("soc_floor_pct", 15),
+                          "current_a": ca})
 
     _post_with_retry(f"{mgmt_url}/api/settings/tou/discharge/all", batch, dry_run)
     log.info("apply: done (%d slot(s) updated)", len(updates))
@@ -324,7 +373,20 @@ def main():
     parser.add_argument("--time",    default=None,               help="Override current time HH:MM (testing)")
     args = parser.parse_args()
 
-    cfg          = load_config(Path(args.config))
+    cfg = load_config(Path(args.config))
+
+    # ── Auto-managed flag ─────────────────────────────────────────────────────
+    try:
+        with urllib.request.urlopen(
+                f"{cfg['management_url']}/api/auto-managed", timeout=5) as _r:
+            _auto = json.loads(_r.read())
+        if not _auto.get("enabled", True):
+            log.info("auto-management is OFF — skipping run")
+            sys.exit(0)
+        log.debug("auto-management is ON")
+    except Exception as _e:
+        log.warning("could not read auto-managed flag (%s) — proceeding", _e)
+
     dispatch_map = load_map()
     map_date     = dispatch_map.get("date", "?")
     instance_id  = dispatch_map.get("instance_id", "")
@@ -343,10 +405,42 @@ def main():
     # ── Read firmware state (source of truth for slots + allow_export) ─────────
     fw_slots, fw_allow_export = _read_fw_state(cfg["management_url"])
 
-    # ── Load soc_disabled from state file (the only thing we persist) ──────────
-    state        = load_state()
-    state_today  = state.get("date") == today
+    # ── Sliding-window slot assignment ────────────────────────────────────────
+    all_sell = [s for s in dispatch_map.get("segments", [])
+                if s["action"] in ("sell_batt", "sell_solar")]
+
+    cur_hash    = _plan_hash(dispatch_map)
+    state       = load_state()
+    state_today = state.get("date") == today
     soc_disabled: list = (state.get("soc_disabled") or []) if state_today else []
+
+    saved_hash = state.get("plan_hash", "") if state_today else ""
+    plan_same  = (state_today and saved_hash == cur_hash and state.get("slot_assignment"))
+
+    prev_assignment: dict[int, dict | None] | None = (
+        {int(k): v for k, v in state["slot_assignment"].items()} if plan_same else None
+    )
+    if not plan_same and state_today and saved_hash and saved_hash != cur_hash:
+        log.info("plan changed (%s → %s) — rebuilding slot assignment", saved_hash, cur_hash)
+
+    slot_assignment = _build_slot_assignment(all_sell, now_minutes, prev_assignment)
+
+    if not plan_same:
+        total    = len(all_sell)
+        assigned = sum(1 for v in slot_assignment.values() if v)
+        log.info("slot assignment: %d of %d sell segments → %s",
+                 assigned, total,
+                 {k: (v["start"] + "–" + v["end"]) for k, v in sorted(slot_assignment.items()) if v})
+    else:
+        recycled = {k: slot_assignment[k] for k in _TOU_SLOTS
+                    if slot_assignment.get(k) and
+                    (not prev_assignment.get(k) or
+                     prev_assignment[k]["start"] != slot_assignment[k]["start"])}
+        if recycled:
+            log.info("slot(s) recycled: %s",
+                     {k: v["start"] + "–" + v["end"] for k, v in recycled.items()})
+        else:
+            log.debug("plan unchanged (hash=%s) — no slot changes", cur_hash)
 
     # ── allow_export: desired vs firmware ─────────────────────────────────────
     cur_seg        = _current_segment(dispatch_map, now_minutes)
@@ -400,7 +494,7 @@ def main():
             soc_triggered  = True
 
     # ── TOU slot assignments ───────────────────────────────────────────────────
-    updates = _compute_updates(dispatch_map, fw_slots, now_minutes, soc_disabled)
+    updates = _compute_updates(slot_assignment, fw_slots, now_minutes, soc_disabled)
 
     if not updates and not export_changed and not soc_triggered:
         log.info("all slots up to date — skipping")
@@ -436,7 +530,8 @@ def main():
         sys.exit(1)
 
     if not args.dry_run:
-        save_state(today, soc_disabled=soc_disabled)
+        save_state(today, soc_disabled=soc_disabled,
+                   plan_hash=cur_hash, slot_assignment=slot_assignment)
         log.info("state saved  soc_disabled=%s", soc_disabled)
 
 
