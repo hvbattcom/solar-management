@@ -38,8 +38,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 # ── Storage settings register layout ─────────────────────────────────────────
 STORAGE_BLOCK1_START = 43024   # battery reserve %
 STORAGE_BLOCK1_COUNT = 87      # 43024-43110: reserve % + mode bitmask
-STORAGE_BLOCK2_START = 43483   # hybrid function control (bit 3 = allow export)
-STORAGE_BLOCK2_COUNT = 1
+STORAGE_BLOCK2_START = 43483   # hybrid function control (bit 3 = allow export inv, bit 7 = peak shaving enable)
+STORAGE_BLOCK2_COUNT = 6       # 43483-43488: hybrid ctrl + peak shaving power
 
 # 43110 mode bitmask
 STORAGE_MODE_BITS = {
@@ -711,7 +711,8 @@ def decode_storage(regmap):
         (name for bit, name in sorted(STORAGE_MODE_BITS.items()) if (reg43110 >> bit) & 1),
         "Unknown",
     )
-    raw_export_limit = regmap.get(43074)
+    raw_export_limit      = regmap.get(43074)
+    raw_peak_shaving_power = regmap.get(43488)
     return {
         "mode":                  mode,
         "battery_reserve_on":    bool((reg43110 >> 4) & 1),
@@ -719,6 +720,8 @@ def decode_storage(regmap):
         "allow_grid_charge":     bool((reg43110 >> 5) & 1),
         "allow_export":          bool((reg43483 >> 3) & 1) if reg43483 is not None else None,
         "max_export_power_w":    raw_export_limit * 100 if raw_export_limit is not None else None,
+        "peak_shaving_on":       bool((reg43483 >> 7) & 1) if reg43483 is not None else None,
+        "peak_shaving_power_w":  raw_peak_shaving_power * 100 if raw_peak_shaving_power is not None else None,
     }
 
 def dump_storage_registers(regmap):
@@ -729,6 +732,7 @@ def dump_storage_registers(regmap):
         43074: "max_export_power   ",
         43110: "mode_bitmask       ",
         43483: "hybrid_func_ctrl   ",
+        43488: "peak_shaving_power ",
     }
     for reg, label in sorted(targets.items()):
         val = regmap.get(reg)
@@ -753,10 +757,15 @@ def dump_storage_registers(regmap):
     if reg43483 is not None:
         print(f"\n  43483 hybrid ctrl bits:")
         print(f"    bit  3 (allow export       ): {(reg43483 >> 3) & 1}")
+        print(f"    bit  7 (peak shaving enable): {(reg43483 >> 7) & 1}")
 
-    KNOWN = {43024, 43074, 43110, 43483}
-    print("\n  Full scan 43000-43483 (non-zero, unknown registers only):")
-    for reg in range(43000, 43484):
+    reg43488 = regmap.get(43488)
+    if reg43488 is not None:
+        print(f"\n  43488 peak shaving power: {reg43488}  (raw — scale unknown)")
+
+    KNOWN = {43024, 43074, 43110, 43483, 43488}
+    print("\n  Full scan 43000-43600 (non-zero, unknown registers only):")
+    for reg in range(43000, 43601):
         if reg in KNOWN:
             continue
         val = regmap.get(reg)
