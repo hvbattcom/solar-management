@@ -34,6 +34,10 @@ Flask HTTP API + single-page web UI for writing inverter settings.
 Reads current state and writes back over Modbus TCP (FC6/FC16).  
 Designed to be embedded in Grafana as an HTML panel.
 
+Also contains **`dispatcher.py`** — a 5-minute cron dispatcher that reads the solar
+planner's dispatch map, derives the desired inverter state from time-ordered events,
+and applies only what has changed (TOU discharge slots, export flag, battery charge current).
+
 See [solis-management/README.md](solis-management/README.md) for full details.
 
 ### `templates/`
