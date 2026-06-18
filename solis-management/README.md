@@ -7,20 +7,23 @@ Companion to `solis-monitor/` (the read-only poller). Shares the same `config.cf
 
 ---
 
-## dispatch.py — Solar plan dispatcher
+## dispatcher.py — Solar plan dispatcher
 
-Runs every 5 minutes via cron on the inverter host. Reads today's dispatch map (written
-by the solar planner) and configures all 6 Solis S6 TOU discharge slots.
+Runs every 5 minutes via cron. Reads today's dispatch map (pushed by the solar planner),
+derives the desired inverter state from past events, compares against live firmware, and
+applies only what changed.
 
 ```cron
-*/5 * * * * /usr/bin/python3 /path/to/dispatch.py >> /var/log/solar_dispatch.log 2>&1
+*/5 * * * * /usr/bin/python3 /path/to/dispatcher.py
 ```
 
 Options:
 ```
---config PATH   path to config.cfg (default: ../solis-monitor/config.cfg)
---dry-run       print actions without writing to inverter
---time HH:MM    override current time (for testing)
+--config PATH    path to config.cfg (default: ../solis-monitor/config.cfg)
+--dry-run        print actions without writing to inverter
+--time HH:MM     override current time (for testing)
+--instance ID    load map for a specific instance_id
+--show           print today's map as a colour timeline and exit
 ```
 
 **Config** (`[SolisAPI]` section of `config.cfg`):
@@ -28,54 +31,86 @@ Options:
 ```ini
 port = 5000                                    # solis-api port
 mothership_prometheus_api = http://10.100.0.1/ # Prometheus for live SoC (optional)
-management_url = http://localhost:5000          # solis-api base URL
 ```
 
-**Auto-managed gate** — First thing each run: queries `GET /api/auto-managed`. If the toggle
-is OFF, dispatcher exits immediately without reading firmware or making any changes. This lets
-you take manual control of the inverter from the web UI.
+### Dispatch map format
 
-**Sliding-window slot recycling** — The firmware has 6 TOU discharge slots; a daily plan can
-have more than 6 sell segments. The dispatcher fills slots 1-6 with the first 6 upcoming
-segments. When a slot's window ends it is immediately recycled to the next deferred segment —
-one write per transition, no cascade across other slots. Plans with ≤ 6 sell windows are
-unaffected.
-
-**Sticky no-write** — A SHA-1 of the map is stored in `dispatch_state.json`. If the plan
-hasn't changed and no slot has expired, the run exits with "all slots up to date — skipping"
-and makes zero firmware writes.
-
-**`X-Dispatcher: 1` header** — All POST requests from `dispatch.py` carry this header so the
-solis-api can distinguish dispatcher calls from manual/UI calls when auto-management is ON.
-
-**SoC floor guard** — During `sell_batt` windows, reads `battery_soc_pct` from Prometheus.
-If live SoC ≤ the segment's `soc_floor_pct`, disables the active TOU slot cleanly before
-the firmware floor fires (which would cause grid import). Requires `mothership_prometheus_api`;
-silently skipped if absent.
-
-**Retry on failure** — HTTP calls retry once; on second failure exits without saving state so
-the next cron run retries automatically.
-
-**State file** (`dispatch_state.json`):
+The solar planner writes a map to `maps/map_YYYY-MM-DD_{instance}.json`:
 
 ```json
 {
-  "date": "2026-06-17",
-  "plan_hash": "25d46c5550ad",
-  "slot_assignment": {
-    "1": {"start": "07:30", "end": "08:00", "action": "sell_solar", ...},
-    "2": {"start": "08:00", "end": "08:15", "action": "sell_batt",  ...},
-    "3": {"start": "08:15", "end": "10:45", "action": "sell_solar", ...},
-    "4": {"start": "16:30", "end": "19:15", "action": "sell_solar", ...},
-    "5": {"start": "19:15", "end": "22:00", "action": "sell_batt",  ...},
-    "6": {"start": "22:15", "end": "23:15", "action": "sell_batt",  ...}
-  },
-  "soc_disabled": ["21:30"]
+  "date": "2026-06-19",
+  "instance_id": "GS48",
+  "algo": "optimal",
+  "sell_kw": 30.0,
+  "tou_slots": [
+    {"start": "05:45", "end": "06:00", "amps": 100, "soc_floor_pct": 15},
+    {"start": "20:00", "end": "22:00", "amps": 100, "soc_floor_pct": 23},
+    {"start": "22:45", "end": "24:00", "amps": 100, "soc_floor_pct": 23}
+  ],
+  "events": [
+    {"time": "05:45", "export": true,  "charge_amps": 1},
+    {"time": "08:30", "export": false, "charge_amps": 100},
+    {"time": "16:15", "export": true},
+    {"time": "20:00", "export": true}
+  ]
 }
 ```
 
-When a plan has > 6 sell segments, some slots will initially be `null` (deferred) and will
-be filled in as earlier slots expire during the day.
+- **`tou_slots`** — battery discharge windows written to all 6 inverter TOU slots (padded with zeros).
+- **`events`** — time-ordered state changes: `export` sets allow_export; `charge_amps` sets battery charge current.
+
+### Behaviour per run
+
+**Desired state** — walks all events with `time ≤ now + 3 min` and takes the last value seen
+for each field (`export`, `charge_amps`). The 3-minute window absorbs cron jitter.
+
+**TOU slot sync** — always compares all 6 firmware slots against the plan's `tou_slots`.
+Writes a full 6-slot batch if any differ.  
+Amps are split equally: `amps ÷ 2` written to both BAT1 and BAT2 (`/api/settings/battery`).  
+Slot-to-window assignment is **randomised** on plan change to spread EEPROM wear across all
+6 slot registers. The random order is persisted in `dispatcher_state.json` for the day.
+
+**Export** — sets `allow_export` (and `max_export_power_w`) if it differs from firmware.
+
+**Charge amps** — sets `bat1_charge_current_a = bat2_charge_current_a = charge_amps ÷ 2`
+if it differs from firmware.
+
+**Pending confirmation** — after each write, the written values are saved as `pending` in
+state. On the next run they are verified against firmware:
+- Confirmed → `pending` cleared, no retry.
+- Not applied → logged as warning; the normal compare-and-apply loop retries automatically.
+
+**SoC floor guard** — if the current time falls inside a `tou_slot` window and live SoC
+(from Prometheus) ≤ `soc_floor_pct + 2%`, the active TOU slot is disabled immediately.
+Requires `mothership_prometheus_api`; silently skipped if absent.
+
+**`X-Dispatcher: 1` header** — all POST requests carry this header so solis-api can
+distinguish dispatcher writes from manual UI writes when auto-management is ON.
+
+### Show command
+
+```bash
+python3 dispatcher.py --show
+python3 dispatcher.py --show --time 20:30
+```
+
+Prints a colour-coded timeline of today's map with the currently active event highlighted.
+
+### State file (`dispatcher_state.json`)
+
+```json
+{
+  "date": "2026-06-19",
+  "plan_hash": "a3f1b2c4d5",
+  "slot_order": [4, 2, 6, 1, 3, 5],
+  "pending": {
+    "export": true,
+    "charge_amps": 1,
+    "tou_slots": [...]
+  }
+}
+```
 
 ---
 
@@ -220,6 +255,36 @@ curl -X POST http://localhost:5000/api/settings/storage \
 ```
 
 Response: `{"ok": true}` or `{"ok": false, "error": "..."}`
+
+### `GET /api/settings/battery` and `POST /api/settings/battery`
+
+Read or write BAT1 and BAT2 charge/discharge current limits.
+
+```json
+{
+  "bat1_charge_current_a":    44.0,
+  "bat1_discharge_current_a": 44.0,
+  "bat2_charge_current_a":    44.0,
+  "bat2_discharge_current_a": 44.0
+}
+```
+
+Registers: BAT1 charge 43012, discharge 43013 (mirrored at 43117/43118); BAT2 charge 43804, discharge 43805.  
+Scale: register value = amps × 10. Valid range: 1–200 A per battery.
+
+```bash
+# Throttle charge to 1 A per battery (maximise solar export)
+curl -X POST http://localhost:5000/api/settings/battery \
+  -H "Content-Type: application/json" \
+  -d '{"bat1_charge_current_a": 1, "bat2_charge_current_a": 1}'
+
+# Restore full charge (50 A per battery = 100 A total)
+curl -X POST http://localhost:5000/api/settings/battery \
+  -H "Content-Type: application/json" \
+  -d '{"bat1_charge_current_a": 50, "bat2_charge_current_a": 50}'
+```
+
+---
 
 ### `POST /api/settings/tou/charge/<N>` and `/discharge/<N>`
 
