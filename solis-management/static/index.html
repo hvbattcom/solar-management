@@ -235,61 +235,114 @@
   <div id="auto-overlay"></div>
   <div class="sp-main">
 
-    <!-- Storage Settings -->
-    <div class="card">
-      <h2>Storage Settings</h2>
-      <div class="setting-rows">
-        <div class="setting-row">
-          <div class="field">
-            <label>Mode</label>
-            <div class="sp-sel" id="mode" data-value="Self Use" onclick="spToggle(this)">
-              <div class="sp-sel-val">Self Use</div>
-              <div class="sp-sel-opts">
-                <div class="sp-sel-opt sel" onclick="spPick(this)">Self Use</div>
-                <div class="sp-sel-opt"     onclick="spPick(this)">Selling First</div>
-                <div class="sp-sel-opt"     onclick="spPick(this)">Off Grid</div>
+    <!-- Storage + Battery side by side -->
+    <div style="display:flex;gap:20px;align-items:flex-start">
+
+      <!-- Storage Settings -->
+      <div class="card" style="flex:3">
+        <h2>Storage Settings</h2>
+        <div class="setting-rows">
+          <div class="setting-row">
+            <div class="field">
+              <label>Mode</label>
+              <div class="sp-sel" id="mode" data-value="Self Use" onclick="spToggle(this)">
+                <div class="sp-sel-val">Self Use</div>
+                <div class="sp-sel-opts">
+                  <div class="sp-sel-opt sel" onclick="spPick(this)">Self Use</div>
+                  <div class="sp-sel-opt"     onclick="spPick(this)">Selling First</div>
+                  <div class="sp-sel-opt"     onclick="spPick(this)">Off Grid</div>
+                </div>
               </div>
             </div>
+            <label class="tog">
+              <input type="checkbox" id="allow_grid_charge">
+              <span>Allow Grid Charge</span>
+            </label>
           </div>
-          <label class="tog">
-            <input type="checkbox" id="allow_grid_charge">
-            <span>Allow Grid Charge</span>
-          </label>
+          <div class="setting-row">
+            <div class="field">
+              <label>Max Export Power (W)</label>
+              <input type="number" id="max_export_power_w" min="0" step="100">
+            </div>
+            <label class="tog">
+              <input type="checkbox" id="allow_export" onchange="setExportLock(this.checked)">
+              <span>Allow Export</span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="field">
+              <label>Grid Peak Shaving Power (W)</label>
+              <input type="number" id="peak_shaving_power_w" min="0" step="100">
+            </div>
+            <label class="tog">
+              <input type="checkbox" id="peak_shaving_on" onchange="setPeakShavingLock(this.checked)">
+              <span>Peak Shaving</span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="field">
+              <label>Battery Reserve (%)</label>
+              <input type="number" id="battery_reserve_pct" min="0" max="100" step="1">
+            </div>
+            <label class="tog">
+              <input type="checkbox" id="battery_reserve_on" onchange="setReserveLock(this.checked)">
+              <span>Battery Reserve Switch</span>
+            </label>
+          </div>
         </div>
-        <div class="setting-row">
-          <div class="field">
-            <label>Max Export Power (W)</label>
-            <input type="number" id="max_export_power_w" min="0" step="100">
-          </div>
-          <label class="tog">
-            <input type="checkbox" id="allow_export" onchange="setExportLock(this.checked)">
-            <span>Allow Export</span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div class="field">
-            <label>Grid Peak Shaving Power (W)</label>
-            <input type="number" id="peak_shaving_power_w" min="0" step="100">
-          </div>
-          <label class="tog">
-            <input type="checkbox" id="peak_shaving_on" onchange="setPeakShavingLock(this.checked)">
-            <span>Peak Shaving</span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div class="field">
-            <label>Battery Reserve (%)</label>
-            <input type="number" id="battery_reserve_pct" min="0" max="100" step="1">
-          </div>
-          <label class="tog">
-            <input type="checkbox" id="battery_reserve_on" onchange="setReserveLock(this.checked)">
-            <span>Battery Reserve Switch</span>
-          </label>
+        <div class="actions">
+          <button class="primary" onclick="saveStorage()">Save</button>
+          <span class="msg" id="storage-msg"></span>
         </div>
       </div>
+
+      <!-- Battery Settings -->
+      <div class="card" style="flex:2">
+        <h2>Battery</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field">
+            <label>BAT1 Charge (A)</label>
+            <input type="number" id="bat1_charge_current_a" min="1" max="200" step="1">
+          </div>
+          <div class="field">
+            <label>BAT1 Discharge (A)</label>
+            <input type="number" id="bat1_discharge_current_a" min="1" max="200" step="1">
+          </div>
+          <div class="field">
+            <label>BAT2 Charge (A)</label>
+            <input type="number" id="bat2_charge_current_a" min="1" max="200" step="1">
+          </div>
+          <div class="field">
+            <label>BAT2 Discharge (A)</label>
+            <input type="number" id="bat2_discharge_current_a" min="1" max="200" step="1">
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="saveBattery()">Save</button>
+          <span class="msg" id="battery-msg"></span>
+        </div>
+      </div>
+
+    </div><!-- end side-by-side -->
+
+    <!-- TOU Discharge Slots -->
+    <div class="card">
+      <h2>TOU — Discharge Slots</h2>
+      <div class="tou-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>En</th>
+              <th class="col-time">Start</th><th class="col-time">End</th>
+              <th class="col-n">Current A</th><th class="col-n">SOC %</th>
+            </tr>
+          </thead>
+          <tbody id="discharge-body"></tbody>
+        </table>
+      </div>
       <div class="actions">
-        <button class="primary" onclick="saveStorage()">Save</button>
-        <span class="msg" id="storage-msg"></span>
+        <button class="primary" onclick="saveAllSlots('discharge')">Save</button>
+        <span class="msg" id="discharge-msg"></span>
       </div>
     </div>
 
@@ -311,27 +364,6 @@
       <div class="actions">
         <button class="primary" onclick="saveAllSlots('charge')">Save</button>
         <span class="msg" id="charge-msg"></span>
-      </div>
-    </div>
-
-    <!-- TOU Discharge Slots -->
-    <div class="card">
-      <h2>TOU — Discharge Slots</h2>
-      <div class="tou-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th><th>En</th>
-              <th class="col-time">Start</th><th class="col-time">End</th>
-              <th class="col-n">Current A</th><th class="col-n">SOC %</th>
-            </tr>
-          </thead>
-          <tbody id="discharge-body"></tbody>
-        </table>
-      </div>
-      <div class="actions">
-        <button class="primary" onclick="saveAllSlots('discharge')">Save</button>
-        <span class="msg" id="discharge-msg"></span>
       </div>
     </div>
 
@@ -516,6 +548,7 @@ async function loadSettings() {
       fillSlots('charge',    d.tou.charge_slots);
       fillSlots('discharge', d.tou.discharge_slots);
     }
+    if (d.battery) fillBattery(d.battery);
     document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     document.getElementById('updated').textContent = '⚠ ' + e.message;
@@ -559,6 +592,30 @@ async function saveStorage() {
     if (data.ok) { flash('storage-msg', '✓ Saved', 'ok'); loadSettings(); }
     else           flash('storage-msg', '✗ ' + data.error, 'err');
   } catch (e) {   flash('storage-msg', '✗ ' + e.message,  'err'); }
+}
+
+/* ── Battery ── */
+function fillBattery(b) {
+  if (!b) return;
+  document.getElementById('bat1_charge_current_a').value    = b.bat1_charge_current_a;
+  document.getElementById('bat1_discharge_current_a').value = b.bat1_discharge_current_a;
+  document.getElementById('bat2_charge_current_a').value    = b.bat2_charge_current_a;
+  document.getElementById('bat2_discharge_current_a').value = b.bat2_discharge_current_a;
+}
+
+async function saveBattery() {
+  const body = {
+    bat1_charge_current_a:    parseFloat(document.getElementById('bat1_charge_current_a').value)    || 0,
+    bat1_discharge_current_a: parseFloat(document.getElementById('bat1_discharge_current_a').value) || 0,
+    bat2_charge_current_a:    parseFloat(document.getElementById('bat2_charge_current_a').value)    || 0,
+    bat2_discharge_current_a: parseFloat(document.getElementById('bat2_discharge_current_a').value) || 0,
+  };
+  try {
+    const res  = await fetch(BASE + '/api/settings/battery', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (data.ok) { flash('battery-msg', '✓ Saved', 'ok'); loadSettings(); }
+    else          flash('battery-msg', '✗ ' + data.error, 'err');
+  } catch (e) {   flash('battery-msg', '✗ ' + e.message,  'err'); }
 }
 
 /* ── TOU slots ── */

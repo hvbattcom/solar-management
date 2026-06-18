@@ -53,6 +53,15 @@ MODE_BITS               = frozenset(STORAGE_MODE_BITS.keys())   # bits 0,1,2,6,1
 BIT_ALLOW_EXPORT_INV    = 3       # inverted: 0 = allow, 1 = block
 BIT_PEAK_SHAVING_EN     = 7       # 1 = enabled
 
+# Battery current registers (×10 scale: register value = amps × 10)
+# BAT1: 43012/43013 + system mirrors 43117/43118 (all four written in sync)
+# BAT2: 43804/43805 (no system mirror observed)
+REG_BAT1_CHARGE_CURRENT    = 43012
+REG_BAT1_DISCHARGE_CURRENT = 43013
+REG_BAT2_CHARGE_CURRENT    = 43804
+REG_BAT2_DISCHARGE_CURRENT = 43805
+BATT_CURRENT_SCALE         = 10
+
 # TOU registers
 REG_TOU_SWITCH          = 43707   # bitmask: bits 0-5 = charge slots 1-6, bits 6-11 = discharge
 REG_TOU_CHARGE_BASE     = 43708   # first charge slot; 7 regs per slot
@@ -354,7 +363,51 @@ def read_settings(client: ModbusTcpClient, cfg: dict) -> dict:
     except IOError:
         tou = None
 
-    return {"storage": storage, "tou": tou}
+    try:
+        battery = read_battery_settings(client, cfg)
+    except IOError:
+        battery = None
+
+    return {"storage": storage, "tou": tou, "battery": battery}
+
+def _validate_battery(fields: dict) -> None:
+    for key in ("bat1_charge_current_a", "bat1_discharge_current_a",
+                "bat2_charge_current_a", "bat2_discharge_current_a"):
+        if key in fields:
+            v = float(fields[key])
+            if v <= 0 or v > 200:
+                raise ValueError(f"{key} must be 1–200 A")
+
+
+def read_battery_settings(client: ModbusTcpClient, cfg: dict) -> dict:
+    """Read BAT1 (43012–43013) and BAT2 (43804–43805) charge/discharge current limits."""
+    b1 = _read_block(client, cfg, REG_BAT1_CHARGE_CURRENT, 2)
+    b2 = _read_block(client, cfg, REG_BAT2_CHARGE_CURRENT, 2)
+    return {
+        "bat1_charge_current_a":    b1[0] / BATT_CURRENT_SCALE,
+        "bat1_discharge_current_a": b1[1] / BATT_CURRENT_SCALE,
+        "bat2_charge_current_a":    b2[0] / BATT_CURRENT_SCALE,
+        "bat2_discharge_current_a": b2[1] / BATT_CURRENT_SCALE,
+    }
+
+
+def write_battery_settings(client: ModbusTcpClient, cfg: dict, fields: dict) -> None:
+    """Write battery current limits. BAT1 also updates system mirrors 43117/43118."""
+    if "bat1_charge_current_a" in fields:
+        v = round(float(fields["bat1_charge_current_a"]) * BATT_CURRENT_SCALE)
+        _write_reg(client, cfg, 43012, v)
+        _write_reg(client, cfg, 43117, v)
+    if "bat1_discharge_current_a" in fields:
+        v = round(float(fields["bat1_discharge_current_a"]) * BATT_CURRENT_SCALE)
+        _write_reg(client, cfg, 43013, v)
+        _write_reg(client, cfg, 43118, v)
+    if "bat2_charge_current_a" in fields:
+        v = round(float(fields["bat2_charge_current_a"]) * BATT_CURRENT_SCALE)
+        _write_reg(client, cfg, REG_BAT2_CHARGE_CURRENT, v)
+    if "bat2_discharge_current_a" in fields:
+        v = round(float(fields["bat2_discharge_current_a"]) * BATT_CURRENT_SCALE)
+        _write_reg(client, cfg, REG_BAT2_DISCHARGE_CURRENT, v)
+
 
 # ── Flask application ─────────────────────────────────────────────────────────
 
@@ -432,6 +485,40 @@ def api_post_storage():
         return _ok()
     except Exception as exc:
         return _err(str(exc), 502)
+
+@app.get("/api/settings/battery")
+def api_get_battery():
+    try:
+        client = _modbus_connect(_cfg)
+        try:
+            data = read_battery_settings(client, _cfg)
+        finally:
+            client.close()
+        return jsonify(data)
+    except Exception as exc:
+        return _err(str(exc), 502)
+
+
+@app.post("/api/settings/battery")
+def api_post_battery():
+    if (g := _managed_guard()): return g
+    fields = request.get_json(silent=True) or {}
+    if not fields:
+        return _err("JSON body required")
+    try:
+        _validate_battery(fields)
+    except ValueError as exc:
+        return _err(str(exc))
+    try:
+        client = _modbus_connect(_cfg)
+        try:
+            write_battery_settings(client, _cfg, fields)
+        finally:
+            client.close()
+        return _ok()
+    except Exception as exc:
+        return _err(str(exc), 502)
+
 
 @app.post("/api/settings/tou/discharge/all")
 def api_post_discharge_all():

@@ -764,12 +764,12 @@ def dump_storage_registers(regmap):
         print(f"\n  43488 peak shaving power: {reg43488}  (raw — scale unknown)")
 
     KNOWN = {43024, 43074, 43110, 43483, 43488}
-    print("\n  Full scan 43000-43600 (non-zero, unknown registers only):")
-    for reg in range(43000, 43601):
+    print("\n  Full scan (non-zero, unknown registers only):")
+    for reg in sorted(regmap):
         if reg in KNOWN:
             continue
-        val = regmap.get(reg)
-        if val is not None and val != 0:
+        val = regmap[reg]
+        if val != 0:
             print(f"    {reg}: {val}  (0x{val:04X})")
 
 # ── Build & validate values ───────────────────────────────────────────────────
@@ -1182,27 +1182,29 @@ def main():
             regmap = {}
             offset = 1 if cfg.get("use_zero_based_addressing", "false").lower() == "true" else 0
             slave_id = int(cfg.get("slave_id", 1))
-            print("Scanning holding registers 43000-43600...", file=sys.stderr)
-            for start in range(43000, 43601, 100):
-                count = min(100, 43601 - start)
-                addr = start - offset
-                try:
-                    rr = client.read_holding_registers(address=addr, count=count, device_id=slave_id)
-                    if not rr.isError():
-                        for i, v in enumerate(rr.registers):
-                            regmap[start + i] = v
-                        continue
-                except Exception:
-                    pass
-                for sub in range(start, start + count, 10):
-                    sub_count = min(10, start + count - sub)
+            SCAN_RANGES = [(40000, 41001), (43000, 45001)]
+            for scan_start, scan_end in SCAN_RANGES:
+                print(f"Scanning holding registers {scan_start}-{scan_end - 1}...", file=sys.stderr)
+                for start in range(scan_start, scan_end, 100):
+                    count = min(100, scan_end - start)
+                    addr = start - offset
                     try:
-                        rr = client.read_holding_registers(address=sub - offset, count=sub_count, device_id=slave_id)
+                        rr = client.read_holding_registers(address=addr, count=count, device_id=slave_id)
                         if not rr.isError():
                             for i, v in enumerate(rr.registers):
-                                regmap[sub + i] = v
+                                regmap[start + i] = v
+                            continue
                     except Exception:
                         pass
+                    for sub in range(start, start + count, 10):
+                        sub_count = min(10, start + count - sub)
+                        try:
+                            rr = client.read_holding_registers(address=sub - offset, count=sub_count, device_id=slave_id)
+                            if not rr.isError():
+                                for i, v in enumerate(rr.registers):
+                                    regmap[sub + i] = v
+                        except Exception:
+                            pass
             dump_storage_registers(regmap)
             return
 
