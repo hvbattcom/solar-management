@@ -246,10 +246,8 @@
               <div class="sp-sel-val">Self Use</div>
               <div class="sp-sel-opts">
                 <div class="sp-sel-opt sel" onclick="spPick(this)">Self Use</div>
-                <div class="sp-sel-opt"     onclick="spPick(this)">Time of Use</div>
+                <div class="sp-sel-opt"     onclick="spPick(this)">Selling First</div>
                 <div class="sp-sel-opt"     onclick="spPick(this)">Off Grid</div>
-                <div class="sp-sel-opt"     onclick="spPick(this)">Feed In Priority</div>
-                <div class="sp-sel-opt"     onclick="spPick(this)">Peak Shaving</div>
               </div>
             </div>
           </div>
@@ -266,6 +264,16 @@
           <label class="tog">
             <input type="checkbox" id="allow_export" onchange="setExportLock(this.checked)">
             <span>Allow Export</span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div class="field">
+            <label>Grid Peak Shaving Power (W)</label>
+            <input type="number" id="peak_shaving_power_w" min="0" step="100">
+          </div>
+          <label class="tog">
+            <input type="checkbox" id="peak_shaving_on" onchange="setPeakShavingLock(this.checked)">
+            <span>Peak Shaving</span>
           </label>
         </div>
         <div class="setting-row">
@@ -348,7 +356,7 @@
 </div>
 
 <script>
-const BASE = "";
+const BASE = "/api/datasources/proxy/2";
 const _snap = { charge: null, discharge: null };
 
 /* ── Drum scroll-wheel picker ─────────────────────────────────────────────── */
@@ -515,29 +523,35 @@ async function loadSettings() {
 }
 
 /* ── Storage ── */
-function setExportLock(on)  { document.getElementById('max_export_power_w').disabled  = !on; }
-function setReserveLock(on) { document.getElementById('battery_reserve_pct').disabled = !on; }
+function setExportLock(on)       { document.getElementById('max_export_power_w').disabled   = !on; }
+function setReserveLock(on)      { document.getElementById('battery_reserve_pct').disabled  = !on; }
+function setPeakShavingLock(on)  { document.getElementById('peak_shaving_power_w').disabled = !on; }
 
 function fillStorage(s) {
   spSet('mode', s.mode);
-  document.getElementById('battery_reserve_on').checked = s.battery_reserve_on;
-  document.getElementById('battery_reserve_pct').value  = s.battery_reserve_pct;
-  document.getElementById('allow_export').checked       = s.allow_export;
-  document.getElementById('allow_grid_charge').checked  = s.allow_grid_charge;
-  document.getElementById('max_export_power_w').value   = s.max_export_power_w;
+  document.getElementById('battery_reserve_on').checked  = s.battery_reserve_on;
+  document.getElementById('battery_reserve_pct').value   = s.battery_reserve_pct;
+  document.getElementById('allow_export').checked        = s.allow_export;
+  document.getElementById('allow_grid_charge').checked   = s.allow_grid_charge;
+  document.getElementById('max_export_power_w').value    = s.max_export_power_w;
+  document.getElementById('peak_shaving_on').checked     = s.peak_shaving_on;
+  document.getElementById('peak_shaving_power_w').value  = s.peak_shaving_power_w;
   setExportLock(s.allow_export);
   setReserveLock(s.battery_reserve_on);
+  setPeakShavingLock(s.peak_shaving_on);
 }
 
 async function saveStorage() {
   const raw = parseInt(document.getElementById('max_export_power_w').value) || 0;
   const body = {
-    mode:                document.getElementById('mode').dataset.value,
-    battery_reserve_on:  document.getElementById('battery_reserve_on').checked,
-    battery_reserve_pct: parseInt(document.getElementById('battery_reserve_pct').value) || 0,
-    allow_export:        document.getElementById('allow_export').checked,
-    allow_grid_charge:   document.getElementById('allow_grid_charge').checked,
-    max_export_power_w:  Math.round(raw / 100) * 100,
+    mode:                 document.getElementById('mode').dataset.value,
+    battery_reserve_on:   document.getElementById('battery_reserve_on').checked,
+    battery_reserve_pct:  parseInt(document.getElementById('battery_reserve_pct').value) || 0,
+    allow_export:         document.getElementById('allow_export').checked,
+    allow_grid_charge:    document.getElementById('allow_grid_charge').checked,
+    max_export_power_w:   Math.round(raw / 100) * 100,
+    peak_shaving_on:      document.getElementById('peak_shaving_on').checked,
+    peak_shaving_power_w: Math.round((parseInt(document.getElementById('peak_shaving_power_w').value) || 0) / 100) * 100,
   };
   try {
     const res  = await fetch(BASE + '/api/settings/storage', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });

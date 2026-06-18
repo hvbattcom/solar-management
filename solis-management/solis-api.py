@@ -32,7 +32,7 @@ STORAGE_MODE_BITS = {
     0:  "Self Use",
     1:  "Time of Use",
     2:  "Off Grid",
-    6:  "Feed In Priority",
+    6:  "Selling First",
     11: "Peak Shaving",
 }
 STORAGE_MODE_BY_NAME = {v: k for k, v in STORAGE_MODE_BITS.items()}
@@ -41,12 +41,17 @@ STORAGE_MODE_BY_NAME = {v: k for k, v in STORAGE_MODE_BITS.items()}
 REG_BATTERY_RESERVE_PCT = 43024   # raw = percent
 REG_MAX_EXPORT_POWER    = 43074   # raw × 100 = watts
 REG_MODE_BITMASK        = 43110   # multi-bit: mode + reserve_on + grid_charge
-REG_HYBRID_CTRL         = 43483   # bit 3 = allow_export
+REG_HYBRID_CTRL         = 43483   # bit 3 = allow_export (inverted), bit 7 = peak_shaving_on
+REG_PEAK_SHAVING_POWER  = 43488   # raw = watts
 
 # Bit positions within REG_MODE_BITMASK
 BIT_BATTERY_RESERVE_ON  = 4
 BIT_ALLOW_GRID_CHARGE   = 5
 MODE_BITS               = frozenset(STORAGE_MODE_BITS.keys())   # bits 0,1,2,6,11
+
+# Bit positions within REG_HYBRID_CTRL
+BIT_ALLOW_EXPORT_INV    = 3       # inverted: 0 = allow, 1 = block
+BIT_PEAK_SHAVING_EN     = 7       # 1 = enabled
 
 # TOU registers
 REG_TOU_SWITCH          = 43707   # bitmask: bits 0-5 = charge slots 1-6, bits 6-11 = discharge
@@ -141,6 +146,10 @@ def _validate_storage(fields: dict) -> None:
         v = int(fields["max_export_power_w"])
         if v < 0 or v % 100 != 0:
             raise ValueError("max_export_power_w must be a non-negative multiple of 100")
+    if "peak_shaving_power_w" in fields:
+        v = int(fields["peak_shaving_power_w"])
+        if v < 0 or v % 100 != 0:
+            raise ValueError("peak_shaving_power_w must be a non-negative multiple of 100")
 
 def _validate_tou_slot(fields: dict) -> None:
     if "start" in fields:
@@ -187,14 +196,23 @@ def write_storage_settings(client: ModbusTcpClient, cfg: dict, fields: dict) -> 
                 current &= ~(1 << BIT_ALLOW_GRID_CHARGE)
         _write_reg(client, cfg, REG_MODE_BITMASK, current)
 
-    # REG_HYBRID_CTRL (43483): allow_export bit 3
-    if "allow_export" in fields:
+    # REG_HYBRID_CTRL (43483): allow_export bit 3 (inverted), peak_shaving_on bit 7
+    if "allow_export" in fields or "peak_shaving_on" in fields:
         current = _read_reg(client, cfg, REG_HYBRID_CTRL)
-        if fields["allow_export"]:
-            current &= ~(1 << 3)
-        else:
-            current |= 1 << 3
+        if "allow_export" in fields:
+            if fields["allow_export"]:
+                current &= ~(1 << BIT_ALLOW_EXPORT_INV)
+            else:
+                current |= 1 << BIT_ALLOW_EXPORT_INV
+        if "peak_shaving_on" in fields:
+            if fields["peak_shaving_on"]:
+                current |= 1 << BIT_PEAK_SHAVING_EN
+            else:
+                current &= ~(1 << BIT_PEAK_SHAVING_EN)
         _write_reg(client, cfg, REG_HYBRID_CTRL, current)
+
+    if "peak_shaving_power_w" in fields:
+        _write_reg(client, cfg, REG_PEAK_SHAVING_POWER, int(fields["peak_shaving_power_w"]) // 100)
 
 
 def write_all_discharge_slots(client: ModbusTcpClient, cfg: dict, slot_updates: list) -> None:
@@ -289,17 +307,21 @@ def read_settings(client: ModbusTcpClient, cfg: dict) -> dict:
     max_export_raw = blk1[REG_MAX_EXPORT_POWER    - REG_BATTERY_RESERVE_PCT]  # offset 50
     mode_mask      = blk1[REG_MODE_BITMASK        - REG_BATTERY_RESERVE_PCT]  # offset 86
 
-    # Block 2: 43483 (1 reg) — hybrid control / allow_export
-    hybrid_ctrl = _read_block(client, cfg, REG_HYBRID_CTRL, 1)[0]
+    # Block 2: 43483–43488 (6 regs) — hybrid control + peak shaving power
+    hybrid_blk            = _read_block(client, cfg, REG_HYBRID_CTRL, REG_PEAK_SHAVING_POWER - REG_HYBRID_CTRL + 1)
+    hybrid_ctrl           = hybrid_blk[0]
+    peak_shaving_power_raw = hybrid_blk[REG_PEAK_SHAVING_POWER - REG_HYBRID_CTRL]
 
     mode = next((name for bit, name in sorted(STORAGE_MODE_BITS.items(), reverse=True) if (mode_mask >> bit) & 1), "Unknown")
     storage = {
-        "mode":                mode,
-        "battery_reserve_on":  bool((mode_mask >> BIT_BATTERY_RESERVE_ON) & 1),
-        "battery_reserve_pct": reserve_pct,
-        "allow_grid_charge":   bool((mode_mask >> BIT_ALLOW_GRID_CHARGE) & 1),
-        "allow_export":        not bool((hybrid_ctrl >> 3) & 1),
-        "max_export_power_w":  max_export_raw * 100,
+        "mode":                 mode,
+        "battery_reserve_on":   bool((mode_mask >> BIT_BATTERY_RESERVE_ON) & 1),
+        "battery_reserve_pct":  reserve_pct,
+        "allow_grid_charge":    bool((mode_mask >> BIT_ALLOW_GRID_CHARGE) & 1),
+        "allow_export":         not bool((hybrid_ctrl >> BIT_ALLOW_EXPORT_INV) & 1),
+        "max_export_power_w":   max_export_raw * 100,
+        "peak_shaving_on":      bool((hybrid_ctrl >> BIT_PEAK_SHAVING_EN) & 1),
+        "peak_shaving_power_w": peak_shaving_power_raw * 100,
     }
 
     # Block 3: 43707–43791 (85 regs) — TOU switch + all 12 slots

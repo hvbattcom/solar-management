@@ -108,7 +108,7 @@ The UI at `/` lets you read and write all settings without curl:
   controls the inverter; the rest of the page is greyed out and a banner is shown. Manual edits
   are blocked at the API level (the dispatcher bypasses this via `X-Dispatcher: 1`). The toggle
   auto-refreshes the page every 30 seconds while active. State is persisted in `auto_managed.json`.
-- **Storage Settings** — mode selector, export limit, battery reserve, toggles for allow-export / allow-grid-charge / reserve-switch
+- **Storage Settings** — mode selector (Self Use / Selling First / Off Grid), export limit, peak shaving power + enable, battery reserve, toggles for allow-export / allow-grid-charge / reserve-switch
 - **TOU Charge Slots** — table with enable checkbox, time range, current, cutoff voltage, SOC target; per-row Save
 - **TOU Discharge Slots** — same layout
 
@@ -166,7 +166,9 @@ Returns current storage + TOU settings read from holding registers (3 block read
     "battery_reserve_pct": 20,
     "allow_export": true,
     "allow_grid_charge": false,
-    "max_export_power_w": 5000
+    "max_export_power_w": 5000,
+    "peak_shaving_on": false,
+    "peak_shaving_power_w": 3000
   },
   "tou": {
     "enabled": false,
@@ -191,18 +193,25 @@ Update any combination of storage settings in one call.
 
 | Field | Type | Values / range |
 |---|---|---|
-| `mode` | string | `"Self Use"`, `"Time of Use"`, `"Off Grid"`, `"Feed In Priority"`, `"Peak Shaving"` |
+| `mode` | string | `"Self Use"`, `"Time of Use"`, `"Off Grid"`, `"Selling First"` (UI exposes first three + Selling First) |
 | `battery_reserve_on` | bool | `true` / `false` |
 | `battery_reserve_pct` | int | 0 – 100 |
 | `allow_export` | bool | `true` / `false` |
 | `allow_grid_charge` | bool | `true` / `false` |
 | `max_export_power_w` | int | ≥ 0, multiple of 100 |
+| `peak_shaving_on` | bool | `true` / `false` — enables peak shaving (register 43483 bit 7) |
+| `peak_shaving_power_w` | int | ≥ 0, multiple of 100 — grid import threshold above which battery limits charging |
 
 ```bash
-# Switch to Feed In Priority and set export limit
+# Switch to Selling First and set export limit
 curl -X POST http://localhost:5000/api/settings/storage \
   -H "Content-Type: application/json" \
-  -d '{"mode": "Feed In Priority", "allow_export": true, "max_export_power_w": 10000}'
+  -d '{"mode": "Selling First", "allow_export": true, "max_export_power_w": 10000}'
+
+# Enable peak shaving at 3000 W grid import threshold
+curl -X POST http://localhost:5000/api/settings/storage \
+  -H "Content-Type: application/json" \
+  -d '{"peak_shaving_on": true, "peak_shaving_power_w": 3000}'
 
 # Just toggle grid charge off
 curl -X POST http://localhost:5000/api/settings/storage \
@@ -245,8 +254,9 @@ curl -X POST http://localhost:5000/api/settings/tou/charge/1 \
 |---|---|---|
 | Battery Reserve % | 43024 | raw = % |
 | Max Export Power | 43074 | raw × 100 = W (100 W granularity) |
-| Mode / flags bitmask | 43110 | bit 0=Self Use, 1=TOU, 2=Off Grid, 4=Reserve On, 5=Grid Charge, 6=Feed In, 11=Peak Shaving |
-| Allow Export | 43483 | bit 3 |
+| Mode / flags bitmask | 43110 | bit 0=Self Use, 1=TOU, 2=Off Grid, 4=Reserve On, 5=Grid Charge, 6=Selling First, 11=Peak Shaving mode |
+| Hybrid function control | 43483 | bit 3=Allow Export (inverted: 0=allowed), bit 7=Peak Shaving enable |
+| Peak Shaving power | 43488 | raw × 100 = W (100 W granularity) — grid import threshold |
 | TOU enable bitmask | 43707 | bits 0-5 = charge slots 1-6, bits 6-11 = discharge slots 1-6 |
 | TOU charge slot N | 43708 + (N-1)×7 | 7 regs: SOC%, I×10, V×10, start_h, start_m, end_h, end_m |
 | TOU discharge slot N | 43750 + (N-1)×7 | same layout |

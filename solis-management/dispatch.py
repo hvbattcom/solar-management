@@ -189,11 +189,16 @@ def _build_slot_assignment(
     """
     prev = prev_assignment or {}
 
-    # Keep slots whose segment hasn't ended yet (includes currently-running ones)
+    # Keep slots whose segment hasn't ended yet AND still exists in the current plan.
+    # Stale segments from a previous plan (different or regenerated) are dropped so
+    # their slots can be recycled to the correct current-plan segments.
     active: dict[int, dict] = {}
+    all_sell_keys = {(s["start"], s["end"]) for s in all_sell}
     for slot in _TOU_SLOTS:
         seg = prev.get(slot)
-        if seg and _tm(seg["end"]) > now_minutes:
+        if (seg
+                and _tm(seg["end"]) > now_minutes
+                and (seg["start"], seg["end"]) in all_sell_keys):
             active[slot] = seg
 
     # Segments not yet in any active slot and not already past
@@ -238,7 +243,7 @@ def _compute_updates(slot_assignment: dict, fw_slots: list, now_minutes: int,
 
         # Build comparable 5-tuples (enabled, start, end, soc_pct, current_a)
         if seg:
-            desired_ca = 0 if seg["action"] == "sell_solar" else seg.get("tou_amps", 100)
+            desired_ca = 0 if seg["action"] == "selling_first" else seg.get("tou_amps", 100)
             fw_ca      = round(cur_fw.get("current_a", -1)) if fw_enabled else None
             desired = (True, _tou_time(seg["start"]), _tou_time(seg["end"]),
                        seg.get("soc_floor_pct", 15), desired_ca)
@@ -262,10 +267,13 @@ def _compute_updates(slot_assignment: dict, fw_slots: list, now_minutes: int,
             continue
 
         if is_active:
-            # Never interrupt a running window — the content will be corrected next run
-            # once the window ends and the slot becomes free.
-            log.debug("  slot %d: active with changed content — deferring", slot_num)
-            continue
+            # Never interrupt active battery discharge — defer until the slot expires.
+            # 0A (selling_first) slots are safe to reprogram immediately: no discharge in progress.
+            fw_is_batt = (cur_fw.get("current_a") or 0) > 0
+            if fw_is_batt:
+                log.debug("  slot %d: active battery discharge — deferring", slot_num)
+                continue
+            log.debug("  slot %d: active 0A (solar) slot — reprogramming", slot_num)
 
         updates[slot_num] = seg
 
@@ -349,7 +357,7 @@ def apply_plan(mgmt_url: str, updates: dict, any_sell: bool,
             batch.append({"slot": slot_num, "enabled": False,
                           "start": "00:00", "end": "00:00"})
         else:
-            is_solar = seg["action"] == "sell_solar"
+            is_solar = seg["action"] == "selling_first"
             ca       = 0 if is_solar else seg.get("tou_amps", 100)
             log.info("  slot %d: %s–%s  floor=%d%%  %s",
                      slot_num, seg["start"], seg["end"], seg.get("soc_floor_pct", 15),
@@ -407,7 +415,7 @@ def main():
 
     # ── Sliding-window slot assignment ────────────────────────────────────────
     all_sell = [s for s in dispatch_map.get("segments", [])
-                if s["action"] in ("sell_batt", "sell_solar")]
+                if s["action"] == "sell_batt"]
 
     cur_hash    = _plan_hash(dispatch_map)
     state       = load_state()
@@ -444,7 +452,7 @@ def main():
 
     # ── allow_export: desired vs firmware ─────────────────────────────────────
     cur_seg        = _current_segment(dispatch_map, now_minutes)
-    desired_export = cur_seg is not None and cur_seg["action"] in ("sell_batt", "sell_solar")
+    desired_export = cur_seg is not None and cur_seg["action"] in ("sell_batt", "selling_first")
 
     # If plan was regenerated and shifted the sell window, but an fw slot is still
     # actively running, keep allow_export True — the inverter is still selling.
@@ -510,7 +518,7 @@ def main():
     max_export_w = int(round(sell_kw * 1000 / 100) * 100)
 
     if export_changed:
-        action_str = cur_seg["action"] if cur_seg else "hold"
+        action_str = cur_seg["action"] if cur_seg else "battery_mode"
         log.info("allow_export: %s → %s  (current segment: %s)",
                  fw_allow_export, desired_export, action_str)
     if updates:
