@@ -195,20 +195,22 @@ def get_slot_order(tou_slots: list, state: dict) -> list[int]:
 def build_desired_slots(tou_slots: list, slot_order: list[int]) -> list[dict]:
     """Assign plan windows to randomised inverter slot numbers; pad unused to 6."""
     mapping: dict[int, dict] = {}
-    for i, slot_num in enumerate(slot_order):
-        if i < len(tou_slots):
-            sl = tou_slots[i]
-            mapping[slot_num] = {
-                "slot":      slot_num,
-                "enabled":   True,
-                "start":     _tou_t(sl["start"]),
-                "end":       _tou_t(sl["end"]),
-                "soc_pct":   sl["soc_floor_pct"],
-                "current_a": sl["amps"],
-            }
-        else:
-            mapping[slot_num] = {"slot": slot_num, "enabled": False,
-                                  "start": "00:00", "end": "00:00"}
+    # Use the chosen slot numbers in ascending order so the inverter sees
+    # windows in chronological order (wear-leveling still picks random slots).
+    active_slots = sorted(slot_order[:len(tou_slots)])
+    sorted_tou   = sorted(tou_slots, key=lambda s: s["start"])
+    for slot_num, sl in zip(active_slots, sorted_tou):
+        mapping[slot_num] = {
+            "slot":      slot_num,
+            "enabled":   True,
+            "start":     _tou_t(sl["start"]),
+            "end":       _tou_t(sl["end"]),
+            "soc_pct":   sl["soc_floor_pct"],
+            "current_a": sl["amps"],
+        }
+    for slot_num in slot_order[len(tou_slots):]:
+        mapping[slot_num] = {"slot": slot_num, "enabled": False,
+                              "start": "00:00", "end": "00:00"}
     return [mapping[n] for n in sorted(mapping)]
 
 
