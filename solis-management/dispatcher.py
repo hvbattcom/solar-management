@@ -285,6 +285,14 @@ def get_soc(prom_url: str, instance_id: str) -> int | None:
         log.warning("soc: prometheus unreachable (%s)", e); return None
 
 
+def _soc_guard_would_fire(tou_slots: list, now_min: int, soc: int | None) -> bool:
+    if soc is None: return False
+    for sl in tou_slots:
+        if _tm(sl["start"]) <= now_min < _tm(sl["end"]):
+            if soc <= sl["soc_floor_pct"] + 2:
+                return True
+    return False
+
 def soc_guard(tou_slots: list, fw_discharge: list, now_min: int,
               soc: int | None, api_url: str, dry_run: bool) -> bool:
     if soc is None: return False
@@ -398,6 +406,21 @@ def main() -> None:
     if want:
         log.info("desired: %s", want)
 
+    # ── SoC (always read — cheap Prometheus query, needed for guard pre-check) ──
+    soc = get_soc(cfg["prom_url"], instance_id)
+    if soc is not None:
+        log.info("soc: %d%%", soc)
+
+    # ── Early exit if nothing has changed since last run ──────────────────────
+    state       = load_state()
+    plan_hash   = _plan_hash(tou_slots)
+    fingerprint = f"{plan_hash}|{json.dumps(want, sort_keys=True)}"
+    if (not state.get("pending")
+            and state.get("fingerprint") == fingerprint
+            and not _soc_guard_would_fire(tou_slots, now_min, soc)):
+        log.debug("desired state unchanged — skipping firmware read")
+        return
+
     # ── Firmware state ────────────────────────────────────────────────────────
     try:
         fw = read_fw(cfg["api_url"])
@@ -409,7 +432,6 @@ def main() -> None:
     fw_battery   = fw.get("battery")
 
     # ── Verify pending writes from last run ───────────────────────────────────
-    state   = load_state()
     pending = state.get("pending")
     if pending:
         all_confirmed = verify_pending(pending, fw)
@@ -417,9 +439,6 @@ def main() -> None:
             state["pending"] = None
 
     # ── SoC guard ─────────────────────────────────────────────────────────────
-    soc = get_soc(cfg["prom_url"], instance_id)
-    if soc is not None:
-        log.info("soc: %d%%", soc)
     soc_hit = soc_guard(tou_slots, fw_discharge, now_min, soc, cfg["api_url"], args.dry_run)
 
     # ── TOU slot sync ─────────────────────────────────────────────────────────
@@ -449,10 +468,11 @@ def main() -> None:
         if exp_hit: new_pending["export"]      = want["export"]
         if chg_hit: new_pending["charge_amps"] = want["charge_amps"]
         save_state({
-            "date":       date.today().isoformat(),
-            "plan_hash":  _plan_hash(tou_slots),
-            "slot_order": slot_order,
-            "pending":    new_pending or None,
+            "date":        date.today().isoformat(),
+            "plan_hash":   plan_hash,
+            "slot_order":  slot_order,
+            "fingerprint": fingerprint,
+            "pending":     new_pending or None,
         })
 
 
