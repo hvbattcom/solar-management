@@ -141,8 +141,7 @@ def _scaled_value(reg: int, raw) -> float:
 
 def _bulk_read(ip: str, sn: int, port: int = 8899, verbose: bool = False) -> dict:
     if PySolarmanV5 is None:
-        print("ERROR: pysolarmanv5 not installed. Run: pip install pysolarmanv5", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("pysolarmanv5 not installed — run: pip install pysolarmanv5")
     ranges = [
         {'start': 0x0094, 'count': 84},   # TOU + battery config
         {'start': 0x0202, 'count': 32},   # energy stats
@@ -167,9 +166,8 @@ def _calc_32bit(low, high) -> float:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-def load_config() -> dict:
-    script_dir = Path(__file__).resolve().parent
-    cfg_path   = script_dir / CONFIG_FILE
+def load_config(path: Path = None) -> dict:
+    cfg_path = Path(path) if path else Path(__file__).resolve().parent / CONFIG_FILE
 
     cfg = configparser.ConfigParser()
     if not cfg_path.exists():
@@ -487,8 +485,7 @@ DUMP_DEFAULT_END   = 0x02B0
 def _scan_holding(ip: str, sn: int, port: int, start: int, end: int, verbose: bool) -> dict:
     """Read all holding registers in [start, end] in chunks, gracefully skipping failures."""
     if PySolarmanV5 is None:
-        print("ERROR: pysolarmanv5 not installed.", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("pysolarmanv5 not installed — run: pip install pysolarmanv5")
     inv    = PySolarmanV5(ip, sn, port=port)
     regmap = {}
     addr   = start
@@ -594,6 +591,9 @@ def get_jinja_env():
     return env
 
 def render(fmt: str, ctx: dict, deye_specific: bool = True):
+    print(render_to_str(fmt, ctx, deye_specific=deye_specific))
+
+def render_to_str(fmt: str, ctx: dict, deye_specific: bool = True) -> str:
     env    = get_jinja_env()
     output = env.get_template(fmt).render(**ctx)
     if deye_specific:
@@ -602,7 +602,11 @@ def render(fmt: str, ctx: dict, deye_specific: bool = True):
             output   = output.rstrip("\n") + "\n" + specific
         except Exception:
             pass
-    print(output)
+    return output
+
+def poll(cfg: dict) -> dict:
+    raw = _bulk_read(cfg["ip"], cfg["sn"], port=cfg["port"], verbose=cfg.get("verbose", False))
+    return build_context(raw, cfg)
 
 # ── CLI / main ────────────────────────────────────────────────────────────────
 

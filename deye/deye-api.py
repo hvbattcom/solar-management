@@ -1,78 +1,85 @@
 #!/usr/bin/env python3
 """
-deye-api.py — Flask HTTP API for Deye inverter settings via SolarmanV5.
+deye-api.py — Flask HTTP API for Deye inverter settings and live status.
 
-Reads:
+Read endpoints:
+  GET /          — management UI (templates/api-index.html)
+  GET /status    — live status dashboard (templates/status.html)
+  GET /api/info  — brand + feature flags (instant, hardcoded)
   GET /api/settings  — TOU + battery + general holding registers
-  GET /api/status    — full poll via deye-monitor.py --format json
+  GET /api/status    — full live poll as JSON
+  GET /metrics       — Prometheus text format
+  GET /human         — human-readable text (terminal format)
 
-Writes (partial — only fields present in the body are changed):
+Write endpoints (partial — only fields present in the body are changed):
   POST /api/settings/tou/<1-6>    — update a single TOU slot
   POST /api/settings/battery      — battery max charge/discharge current
-  POST /api/settings/general      — grid charge enable, solar sell enable
+  POST /api/settings/general      — grid charge enable, solar sell enable, etc.
 """
 
 import argparse
 import configparser
-import subprocess
+import importlib.util
 import sys
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
+
+# ── Load deye-monitor as a module (hyphen in filename requires importlib) ──────
+_monitor_path = Path(__file__).resolve().parent / "deye-monitor.py"
+_spec         = importlib.util.spec_from_file_location("deye_monitor", str(_monitor_path))
+_monitor      = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_monitor)
 
 try:
     from pysolarmanv5 import PySolarmanV5
 except ImportError:
     PySolarmanV5 = None
 
-# ── Register map (decimal addresses) ─────────────────────────────────────────
+# ── Register map (write endpoints only – full map lives in deye-monitor.py) ───
 
-REG_BAT_CHG_MAX     = 108   # 0x006C  Battery 1 Max Charge current (A)
-REG_BAT_DIS_MAX     = 109   # 0x006D  Battery 1 Max Discharge current (A)
-REG_GRID_CHARGE_EN  = 130   # 0=off 1=on
-REG_ENERGY_MODE     = 140   # bit0-1: 0=Self Use, 2=Battery First, 3=Load First
-REG_MAX_SELL_POWER  = 143   # raw × 10 = W
-REG_SOLAR_SELL_EN   = 145   # 0=off 1=on
-REG_TOU_TIME_BASE   = 148   # 148-153: slot 1-6 start time, HHMM integer
-REG_TOU_POWER_BASE  = 154   # 154-159: slot 1-6 power, raw × 10 = W
-REG_TOU_VOLTAGE_BASE= 160   # 160-165: slot 1-6 voltage (not exposed)
-REG_TOU_SOC_BASE    = 166   # 166-171: slot 1-6 SOC %
-REG_TOU_CTRL_BASE   = 172   # 172-177: slot 1-6 ctrl bitmask
-REG_CTRL_SPECIAL_1  = 178   # bit4-5: 10=Grid PS disable, 11=Grid PS enable
-REG_GRID_PS_POWER   = 191   # raw × 10 = W  (178+13)
-REG_BAT2_CHG_MAX    = 243   # Battery 2 Max Charge current (A)
-REG_BAT2_DIS_MAX    = 244   # Battery 2 Max Discharge current (A)
+REG_BAT_CHG_MAX     = 108
+REG_BAT_DIS_MAX     = 109
+REG_GRID_CHARGE_EN  = 130
+REG_ENERGY_MODE     = 140
+REG_MAX_SELL_POWER  = 143
+REG_SOLAR_SELL_EN   = 145
+REG_TOU_TIME_BASE   = 148
+REG_TOU_POWER_BASE  = 154
+REG_TOU_SOC_BASE    = 166
+REG_TOU_CTRL_BASE   = 172
+REG_CTRL_SPECIAL_1  = 178
+REG_GRID_PS_POWER   = 191
+REG_BAT2_CHG_MAX    = 243
+REG_BAT2_DIS_MAX    = 244
 
-BIT_GRID_CHG = 0   # ctrl bit 0 = grid charging enable
-BIT_GEN_CHG  = 1   # ctrl bit 1 = gen charging enable
-BIT_SELL     = 5   # ctrl bit 5 = solar sell enable (per-slot)
+BIT_GRID_CHG = 0
+BIT_GEN_CHG  = 1
+BIT_SELL     = 5
 
-ENERGY_MODES = {"Self Use": 0, "Battery First": 2, "Load First": 3}
+ENERGY_MODES         = {"Self Use": 0, "Selling First": 1, "Battery First": 2, "Load First": 3}
 ENERGY_MODES_BY_CODE = {v: k for k, v in ENERGY_MODES.items()}
+
+REG_LIMIT_CONTROL         = 142   # 0=off, 1=zero export to load, 2=zero export to CT
+LIMIT_CONTROL             = {"Selling First": 0, "Zero Export to Load": 1, "Zero Export to CT": 2}
+LIMIT_CONTROL_BY_CODE     = {v: k for k, v in LIMIT_CONTROL.items()}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "deye-monitor" / "config.cfg"
+_DEFAULT_CONFIG = Path(__file__).resolve().parent / "config.cfg"
 
 
 def load_config(path: Path) -> dict:
-    cfg = configparser.ConfigParser()
-    cfg.read(str(path))
-    if "DeyeInverter" not in cfg:
-        raise KeyError(f"[DeyeInverter] section not found in {path}")
-    sec = cfg["DeyeInverter"]
-    srv = cfg["DeyeAPI"] if "DeyeAPI" in cfg else {}
-    return {
-        "ip":             sec["inverter_ip"].strip(),
-        "port":           int(sec.get("inverter_port", 8899)),
-        "sn":             int(sec.get("inverter_sn", 0)),
-        "monitor_script": str(Path(__file__).resolve().parent.parent / "deye-monitor" / "deye-monitor.py"),
-        "server_host":    srv.get("host", "0.0.0.0").strip(),
-        "server_port":    int(srv.get("port", 5001)),
-    }
+    cfg = _monitor.load_config(path)   # ip, port, sn, brand, verbose, inverter_power_w, mppt_count
+    parser = configparser.ConfigParser()
+    parser.read(str(path))
+    srv = parser["DeyeAPI"] if "DeyeAPI" in parser else {}
+    cfg["server_host"] = srv.get("host", "0.0.0.0").strip()
+    cfg["server_port"] = int(srv.get("port", 5001))
+    return cfg
 
 
-# ── SolarmanV5 helpers ────────────────────────────────────────────────────────
+# ── SolarmanV5 helpers (write path) ──────────────────────────────────────────
 
 def _connect(cfg: dict) -> "PySolarmanV5":
     if PySolarmanV5 is None:
@@ -104,38 +111,36 @@ def _str_to_hhmm(s: str) -> int:
     return h * 100 + m
 
 
-# ── High-level read ───────────────────────────────────────────────────────────
+# ── High-level read (settings panel) ─────────────────────────────────────────
 
 def read_settings(cfg: dict) -> dict:
     inv = _connect(cfg)
     try:
-        bat1     = _read_regs(inv, REG_BAT_CHG_MAX, 2)        # 108-109
-        gcen     = _read_regs(inv, REG_GRID_CHARGE_EN, 1)[0]   # 130
-        blk140   = _read_regs(inv, REG_ENERGY_MODE, 4)         # 140-143
-        ssen     = _read_regs(inv, REG_SOLAR_SELL_EN, 1)[0]    # 145
-        tou_blk  = _read_regs(inv, REG_TOU_TIME_BASE, 30)      # 148-177
-        blk178   = _read_regs(inv, REG_CTRL_SPECIAL_1, 14)     # 178-191
-        bat2     = _read_regs(inv, REG_BAT2_CHG_MAX, 2)        # 243-244
+        bat1    = _read_regs(inv, REG_BAT_CHG_MAX, 2)
+        gcen    = _read_regs(inv, REG_GRID_CHARGE_EN, 1)[0]
+        blk140  = _read_regs(inv, REG_ENERGY_MODE, 4)
+        ssen    = _read_regs(inv, REG_SOLAR_SELL_EN, 1)[0]
+        tou_blk = _read_regs(inv, REG_TOU_TIME_BASE, 30)
+        blk178  = _read_regs(inv, REG_CTRL_SPECIAL_1, 14)
+        bat2    = _read_regs(inv, REG_BAT2_CHG_MAX, 2)
     finally:
         inv.disconnect()
 
     mode_code    = blk140[0] & 3
+    limit_val    = blk140[2]          # reg 142 — limit control
     max_sell_raw = blk140[3]
     ctrl178      = blk178[0]
-    grid_ps_raw  = blk178[13]                          # reg 191 = 178+13
-    grid_ps_on   = ((ctrl178 >> 4) & 3) == 3           # bits 4-5 = 11 → enabled
+    grid_ps_raw  = blk178[13]
+    grid_ps_on   = ((ctrl178 >> 4) & 3) == 3
 
     slots = []
     for i in range(6):
-        time_raw  = tou_blk[i]
-        power_raw = tou_blk[6 + i]
-        soc_raw   = tou_blk[18 + i]
-        ctrl_raw  = tou_blk[24 + i]
+        ctrl_raw = tou_blk[24 + i]
         slots.append({
             "slot":        i + 1,
-            "time":        _hhmm_to_str(time_raw),
-            "power_w":     power_raw * 10,
-            "soc_pct":     soc_raw,
+            "time":        _hhmm_to_str(tou_blk[i]),
+            "power_w":     tou_blk[6 + i] * 10,
+            "soc_pct":     tou_blk[18 + i],
             "grid_charge": bool(ctrl_raw & (1 << BIT_GRID_CHG)),
             "gen_charge":  bool(ctrl_raw & (1 << BIT_GEN_CHG)),
             "sell":        bool(ctrl_raw & (1 << BIT_SELL)),
@@ -144,6 +149,7 @@ def read_settings(cfg: dict) -> dict:
     return {
         "general": {
             "energy_mode":               ENERGY_MODES_BY_CODE.get(mode_code, "Self Use"),
+            "limit_control":             LIMIT_CONTROL_BY_CODE.get(limit_val, "Selling First"),
             "grid_charge_enable":        bool(gcen),
             "solar_sell_enable":         bool(ssen),
             "max_sell_power_w":          max_sell_raw * 10,
@@ -151,8 +157,8 @@ def read_settings(cfg: dict) -> dict:
             "grid_peak_shaving_power_w": grid_ps_raw * 10,
         },
         "battery": {
-            "max_charge_a":       bat1[0],
-            "max_discharge_a":    bat1[1],
+            "max_charge_a":         bat1[0],
+            "max_discharge_a":      bat1[1],
             "bat2_max_charge_a":    bat2[0],
             "bat2_max_discharge_a": bat2[1],
         },
@@ -168,8 +174,7 @@ def write_tou_slot(cfg: dict, slot_num: int, fields: dict) -> None:
     i   = slot_num - 1
     inv = _connect(cfg)
     try:
-        # Read current slot values so partial updates work
-        blk      = _read_regs(inv, REG_TOU_TIME_BASE, 30)
+        blk       = _read_regs(inv, REG_TOU_TIME_BASE, 30)
         time_raw  = blk[i]
         power_raw = blk[6 + i]
         soc_raw   = blk[18 + i]
@@ -205,9 +210,9 @@ def write_battery(cfg: dict, fields: dict) -> None:
     inv = _connect(cfg)
     try:
         for key, reg, label in (
-            ("max_charge_a",       REG_BAT_CHG_MAX,  "max_charge_a"),
-            ("max_discharge_a",    REG_BAT_DIS_MAX,  "max_discharge_a"),
-            ("bat2_max_charge_a",  REG_BAT2_CHG_MAX, "bat2_max_charge_a"),
+            ("max_charge_a",         REG_BAT_CHG_MAX,  "max_charge_a"),
+            ("max_discharge_a",      REG_BAT_DIS_MAX,  "max_discharge_a"),
+            ("bat2_max_charge_a",    REG_BAT2_CHG_MAX, "bat2_max_charge_a"),
             ("bat2_max_discharge_a", REG_BAT2_DIS_MAX, "bat2_max_discharge_a"),
         ):
             if key in fields:
@@ -237,27 +242,36 @@ def write_general(cfg: dict, fields: dict) -> None:
         if "grid_peak_shaving_on" in fields:
             ctrl = _read_regs(inv, REG_CTRL_SPECIAL_1, 1)[0]
             if fields["grid_peak_shaving_on"]:
-                ctrl = (ctrl & ~(3 << 4)) | (3 << 4)   # bits 4-5 → 11 (enable)
+                ctrl = (ctrl & ~(3 << 4)) | (3 << 4)
             else:
-                ctrl = (ctrl & ~(3 << 4)) | (2 << 4)   # bits 4-5 → 10 (disable)
+                ctrl = (ctrl & ~(3 << 4)) | (2 << 4)
             _write_reg(inv, REG_CTRL_SPECIAL_1, ctrl & 0xFFFF)
         if "grid_peak_shaving_power_w" in fields:
             _write_reg(inv, REG_GRID_PS_POWER, int(fields["grid_peak_shaving_power_w"]) // 10)
+        if "limit_control" in fields:
+            name = fields["limit_control"]
+            if name not in LIMIT_CONTROL:
+                raise ValueError(f"Unknown limit control '{name}'. Valid: {list(LIMIT_CONTROL)}")
+            _write_reg(inv, REG_LIMIT_CONTROL, LIMIT_CONTROL[name])
     finally:
         inv.disconnect()
 
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 
-_STATIC    = Path(__file__).resolve().parent / "static"
 _TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
-app        = Flask(__name__, static_folder=str(_STATIC), static_url_path="/static")
+app        = Flask(__name__)
 _cfg: dict = {}
 
 
 @app.get("/")
 def index():
     return send_from_directory(str(_TEMPLATES), "api-index.html")
+
+
+@app.get("/status")
+def status_page():
+    return send_from_directory(str(_TEMPLATES), "status.html")
 
 
 @app.get("/api/info")
@@ -284,15 +298,35 @@ def api_get_settings():
 @app.get("/api/status")
 def api_get_status():
     try:
-        result = subprocess.run(
-            [sys.executable, _cfg["monitor_script"], "--format", "json"],
-            capture_output=True, text=True, timeout=60,
+        ctx = _monitor.poll(_cfg)
+        return app.response_class(
+            _monitor.render_to_str("json", ctx),
+            mimetype="application/json",
         )
-        if result.returncode not in (0, 2):
-            return _err(f"deye-monitor exited {result.returncode}: {result.stderr[:300]}", 502)
-        return app.response_class(result.stdout, mimetype="application/json")
-    except subprocess.TimeoutExpired:
-        return _err("deye-monitor poll timed out", 504)
+    except Exception as exc:
+        return _err(str(exc), 502)
+
+
+@app.get("/metrics")
+def api_metrics():
+    try:
+        ctx = _monitor.poll(_cfg)
+        return app.response_class(
+            _monitor.render_to_str("prometheus", ctx),
+            mimetype="text/plain; version=0.0.4",
+        )
+    except Exception as exc:
+        return _err(str(exc), 502)
+
+
+@app.get("/human")
+def api_human():
+    try:
+        ctx = _monitor.poll(_cfg)
+        return app.response_class(
+            _monitor.render_to_str("human", ctx),
+            mimetype="text/plain; charset=utf-8",
+        )
     except Exception as exc:
         return _err(str(exc), 502)
 
