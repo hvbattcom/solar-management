@@ -108,6 +108,9 @@
     color: #1e293b !important;
     -webkit-text-fill-color: #1e293b !important;
   }
+  .inv .bat-label { font-size: .75rem; font-weight: 700; letter-spacing: .06em; color: var(--muted); text-align: center; white-space: nowrap; }
+  .inv .bat-unit  { font-size: .8rem; color: var(--muted); flex-shrink: 0; }
+  .inv .bat-cell  { display: flex; align-items: center; gap: 5px; }
 
   /* ── TOU table ── */
   .inv .tou-wrap { overflow-x: auto; }
@@ -224,7 +227,20 @@
           <div class="setting-rows">
             <!-- Row 1: Mode + Grid Charge -->
             <div class="setting-row">
-              <div class="field">
+              <!-- Deye: limit control (reg 142) shown as "Mode" -->
+              <div class="field" id="deye-mode-field" style="display:none">
+                <label>Mode</label>
+                <div class="inv-sel" id="zero_export" data-value="Selling First" onclick="selToggle(this)">
+                  <div class="inv-sel-val">Selling First</div>
+                  <div class="inv-sel-opts">
+                    <div class="inv-sel-opt sel" onclick="selPick(this, event)">Selling First</div>
+                    <div class="inv-sel-opt"     onclick="selPick(this, event)">Zero Export to Load</div>
+                    <div class="inv-sel-opt"     onclick="selPick(this, event)">Zero Export to CT</div>
+                  </div>
+                </div>
+              </div>
+              <!-- Solis: energy_mode as "Mode" / Deye: hidden "Energy Pattern" -->
+              <div class="field" id="solis-mode-field" style="display:none">
                 <label>Mode</label>
                 <div class="inv-sel" id="mode" data-value="" onclick="selToggle(this)">
                   <div class="inv-sel-val"></div>
@@ -281,27 +297,27 @@
           <h2>Battery</h2>
           <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:8px 12px;align-items:center">
             <div></div>
-            <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT1</div>
-            <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT2</div>
+            <div class="bat-label">BAT1</div>
+            <div class="bat-label">BAT2</div>
 
-            <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Charge</div>
-            <div style="display:flex;align-items:center;gap:5px">
+            <div class="bat-label">Charge</div>
+            <div class="bat-cell">
               <input type="number" id="bat1_charge" min="1" max="300" step="1" class="bat-input">
-              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+              <span class="bat-unit">A</span>
             </div>
-            <div style="display:flex;align-items:center;gap:5px">
+            <div class="bat-cell">
               <input type="number" id="bat2_charge" min="1" max="300" step="1" class="bat-input">
-              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+              <span class="bat-unit">A</span>
             </div>
 
-            <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Discharge</div>
-            <div style="display:flex;align-items:center;gap:5px">
+            <div class="bat-label">Discharge</div>
+            <div class="bat-cell">
               <input type="number" id="bat1_discharge" min="1" max="300" step="1" class="bat-input">
-              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+              <span class="bat-unit">A</span>
             </div>
-            <div style="display:flex;align-items:center;gap:5px">
+            <div class="bat-cell">
               <input type="number" id="bat2_discharge" min="1" max="300" step="1" class="bat-input">
-              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+              <span class="bat-unit">A</span>
             </div>
           </div>
           <div class="actions">
@@ -338,47 +354,6 @@
         </div>
       </div>
 
-      <!-- Solis TOU: Discharge (shown for Solis, hidden for Deye) -->
-      <div id="tou-solis-discharge" class="card" style="display:none">
-        <h2>TOU — Discharge Slots</h2>
-        <div class="tou-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th><th>En</th>
-                <th class="col-time">Start</th><th class="col-time">End</th>
-                <th class="col-n">Current A</th><th class="col-n">SOC %</th>
-              </tr>
-            </thead>
-            <tbody id="discharge-body"></tbody>
-          </table>
-        </div>
-        <div class="actions">
-          <button class="primary" onclick="saveAllSlots('discharge')">Save</button>
-          <span class="msg" id="discharge-msg"></span>
-        </div>
-      </div>
-
-      <!-- Solis TOU: Charge (shown for Solis, hidden for Deye) -->
-      <div id="tou-solis-charge" class="card" style="display:none">
-        <h2>TOU — Charge Slots</h2>
-        <div class="tou-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th><th>En</th>
-                <th class="col-time">Start</th><th class="col-time">End</th>
-                <th class="col-n">Current A</th><th class="col-n">SOC %</th>
-              </tr>
-            </thead>
-            <tbody id="charge-body"></tbody>
-          </table>
-        </div>
-        <div class="actions">
-          <button class="primary" onclick="saveAllSlots('charge')">Save</button>
-          <span class="msg" id="charge-msg"></span>
-        </div>
-      </div>
 
     </div><!-- inv-main -->
   </div><!-- main-wrap -->
@@ -413,7 +388,7 @@ const BRAND_CFG = {
     title:          '⚡ Deye Management',
     accent:         '#0ea5e9',
     accent2:        '#0284c7',
-    modeOptions:    ['Self Use', 'Battery First', 'Load First'],
+    energyPatternOptions: ['Self Use', 'Selling First', 'Battery First', 'Load First'],
     generalTitle:   'General',
     sellPowerLabel: 'Max Sell Power (W)',
     sellLabel:      'Solar Sell Enable',
@@ -421,12 +396,13 @@ const BRAND_CFG = {
     generalEndpoint:'/api/settings/general',
     powerStep:      10,
     gf: {
-      mode:         'energy_mode',
-      grid_charge:  'grid_charge_enable',
-      sell_enable:  'solar_sell_enable',
-      sell_power:   'max_sell_power_w',
-      peak_shaving: 'grid_peak_shaving_on',
-      peak_power:   'grid_peak_shaving_power_w',
+      mode:          'energy_mode',
+      limit_control: 'limit_control',
+      grid_charge:   'grid_charge_enable',
+      sell_enable:   'solar_sell_enable',
+      sell_power:    'max_sell_power_w',
+      peak_shaving:  'grid_peak_shaving_on',
+      peak_power:    'grid_peak_shaving_power_w',
     },
     bf: {
       bat1_charge:    'max_charge_a',
@@ -477,29 +453,33 @@ function applyBrand(info) {
   document.documentElement.style.setProperty('--accent',  _cfg.accent);
   document.documentElement.style.setProperty('--accent2', _cfg.accent2);
 
-  document.getElementById('brand-title').textContent       = _cfg.title;
-  document.getElementById('general-card-title').textContent = _cfg.generalTitle;
-  document.getElementById('sell-power-label').textContent  = _cfg.sellPowerLabel;
-  document.getElementById('sell-enable-label').textContent = _cfg.sellLabel;
-  document.getElementById('grid-charge-label').textContent = _cfg.gridChargeLabel;
+  [
+    ['brand-title',        _cfg.title],
+    ['general-card-title', _cfg.generalTitle],
+    ['sell-power-label',   _cfg.sellPowerLabel],
+    ['sell-enable-label',  _cfg.sellLabel],
+    ['grid-charge-label',  _cfg.gridChargeLabel],
+  ].forEach(([id, text]) => document.getElementById(id).textContent = text);
 
-  // W step on power inputs
-  document.getElementById('sell_power').step        = _cfg.powerStep;
-  document.getElementById('peak_shaving_power').step = _cfg.powerStep;
+  ['sell_power', 'peak_shaving_power'].forEach(id => document.getElementById(id).step = _cfg.powerStep);
 
-  // Populate mode options
-  document.querySelector('#mode .inv-sel-opts').innerHTML = _cfg.modeOptions
-    .map((o, i) => `<div class="inv-sel-opt${i===0?' sel':''}" onclick="selPick(this)">${o}</div>`)
+  // Populate #mode selector options (visible for Solis, hidden "Energy Pattern" for Deye)
+  const modeOpts = _cfg.energyPatternOptions || _cfg.modeOptions || [];
+  document.querySelector('#mode .inv-sel-opts').innerHTML = modeOpts
+    .map((o, i) => `<div class="inv-sel-opt${i===0?' sel':''}" onclick="selPick(this, event)">${o}</div>`)
     .join('');
 
   // Show brand-specific sections
   if (info.auto_managed) document.getElementById('auto-switch-wrap').style.display = '';
   if (_brand === 'solis') {
+    _buildSolisTou();
+    document.getElementById('solis-mode-field').style.display    = '';
     document.getElementById('reserve-row').style.display         = '';
     document.getElementById('tou-solis-discharge').style.display = '';
     document.getElementById('tou-solis-charge').style.display    = '';
   } else {
-    document.getElementById('tou-deye').style.display = '';
+    document.getElementById('deye-mode-field').style.display = '';
+    document.getElementById('tou-deye').style.display         = '';
   }
 }
 
@@ -517,10 +497,10 @@ function selToggle(el) {
   document.querySelectorAll('.inv-sel.open').forEach(s => s.classList.remove('open'));
   if (!isOpen) el.classList.add('open');
 }
-function selPick(opt) {
+function selPick(opt, e) {
   selSet(opt.closest('.inv-sel').id, opt.textContent);
   opt.closest('.inv-sel').classList.remove('open');
-  event.stopPropagation();
+  e.stopPropagation();
 }
 document.addEventListener('click', e => {
   if (!e.target.closest('.inv-sel')) document.querySelectorAll('.inv-sel.open').forEach(s => s.classList.remove('open'));
@@ -632,6 +612,20 @@ function _roundW(val) {
   return Math.round((parseInt(val) || 0) / s) * s;
 }
 
+async function _post(path, body) {
+  const r = await fetch(BASE + path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  return r.json();
+}
+
+async function saveWithFlash(path, body, msgId) {
+  try {
+    const data = await _post(path, body);
+    if (data.ok) { flash(msgId, '✓ Saved', 'ok'); return true; }
+    flash(msgId, '✗ ' + data.error, 'err');
+  } catch (e) { flash(msgId, '✗ ' + e.message, 'err'); }
+  return false;
+}
+
 /* ── Load settings ────────────────────────────────────────────────────────── */
 async function loadSettings() {
   try {
@@ -660,6 +654,7 @@ function setReserveLock(on)     { document.getElementById('battery_reserve_pct')
 function fillGeneral(g) {
   const f = _cfg.gf;
   selSet('mode', g[f.mode]);
+  if (f.limit_control) selSet('zero_export', g[f.limit_control] || 'Selling First');
   document.getElementById('grid_charge').checked      = g[f.grid_charge];
   document.getElementById('sell_enable').checked      = g[f.sell_enable];
   document.getElementById('sell_power').value         = g[f.sell_power];
@@ -684,16 +679,14 @@ async function saveGeneral() {
     [f.peak_shaving]: document.getElementById('peak_shaving').checked,
     [f.peak_power]:   _roundW(document.getElementById('peak_shaving_power').value),
   };
+  if (_brand === 'deye') {
+    body[f.limit_control] = document.getElementById('zero_export').dataset.value;
+  }
   if (_brand === 'solis') {
     body[f.reserve]     = document.getElementById('battery_reserve_on').checked;
     body[f.reserve_pct] = parseInt(document.getElementById('battery_reserve_pct').value) || 0;
   }
-  try {
-    const res  = await fetch(BASE + _cfg.generalEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-    const data = await res.json();
-    if (data.ok) { flash('general-msg', '✓ Saved', 'ok'); loadSettings(); }
-    else           flash('general-msg', '✗ ' + data.error, 'err');
-  } catch (e) {   flash('general-msg', '✗ ' + e.message, 'err'); }
+  if (await saveWithFlash(_cfg.generalEndpoint, body, 'general-msg')) loadSettings();
 }
 
 /* ── Battery ──────────────────────────────────────────────────────────────── */
@@ -714,12 +707,7 @@ async function saveBattery() {
     [f.bat2_charge]:    parseFloat(document.getElementById('bat2_charge').value)    || 0,
     [f.bat2_discharge]: parseFloat(document.getElementById('bat2_discharge').value) || 0,
   };
-  try {
-    const res  = await fetch(BASE + '/api/settings/battery', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-    const data = await res.json();
-    if (data.ok) { flash('battery-msg', '✓ Saved', 'ok'); loadSettings(); }
-    else           flash('battery-msg', '✗ ' + data.error, 'err');
-  } catch (e) {   flash('battery-msg', '✗ ' + e.message, 'err'); }
+  if (await saveWithFlash('/api/settings/battery', body, 'battery-msg')) loadSettings();
 }
 
 /* ── Deye TOU ─────────────────────────────────────────────────────────────── */
@@ -780,8 +768,7 @@ async function saveTou() {
   }));
   if (toSave.length === 0) { btn.disabled = false; flash('tou-msg', '✓ No changes', 'ok'); return; }
   const results = await Promise.all(toSave.map(({ slot, body }) =>
-    fetch(BASE + `/api/settings/tou/${slot}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
-      .then(r => r.json()).catch(e => ({ ok:false, error:e.message }))
+    _post(`/api/settings/tou/${slot}`, body).catch(e => ({ ok:false, error:e.message }))
   ));
   btn.disabled = false;
   const failed = results.filter(r => !r.ok);
@@ -850,13 +837,40 @@ async function saveAllSlots(type) {
   }).filter(Boolean);
   if (toSave.length === 0) { btn.disabled = false; flash(`${type}-msg`, '✓ No changes', 'ok'); return; }
   const results = await Promise.all(toSave.map(({ slot, body }) =>
-    fetch(BASE + `/api/settings/tou/${type}/${slot}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
-      .then(r => r.json()).catch(e => ({ ok:false, error:e.message }))
+    _post(`/api/settings/tou/${type}/${slot}`, body).catch(e => ({ ok:false, error:e.message }))
   ));
   btn.disabled = false;
   const failed = results.filter(r => !r.ok);
   if (failed.length === 0) { flash(`${type}-msg`, `✓ Saved (${toSave.length} slot${toSave.length>1?'s':''})`, 'ok'); loadSettings(); }
   else flash(`${type}-msg`, `✗ ${failed.length} slot(s) failed`, 'err');
+}
+
+/* ── Solis TOU card builder ───────────────────────────────────────────────── */
+function _buildSolisTou() {
+  if (document.getElementById('tou-solis-discharge')) return;
+  const wrap = document.querySelector('.inv-main');
+  ['discharge', 'charge'].forEach(type => {
+    const title = type === 'discharge' ? 'TOU — Discharge Slots' : 'TOU — Charge Slots';
+    const div   = document.createElement('div');
+    div.id        = `tou-solis-${type}`;
+    div.className = 'card';
+    div.style.display = 'none';
+    div.innerHTML = `
+      <h2>${title}</h2>
+      <div class="tou-wrap"><table>
+        <thead><tr>
+          <th>#</th><th>En</th>
+          <th class="col-time">Start</th><th class="col-time">End</th>
+          <th class="col-n">Current A</th><th class="col-n">SOC %</th>
+        </tr></thead>
+        <tbody id="${type}-body"></tbody>
+      </table></div>
+      <div class="actions">
+        <button class="primary" onclick="saveAllSlots('${type}')">Save</button>
+        <span class="msg" id="${type}-msg"></span>
+      </div>`;
+    wrap.appendChild(div);
+  });
 }
 
 /* ── Solis auto-managed ───────────────────────────────────────────────────── */
