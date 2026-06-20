@@ -1,0 +1,18 @@
+[DeyeInverter]
+# IP or hostname of the SOLARMAN datalogger (can be a public IP / DDNS name for remote access)
+inverter_ip = 192.168.1.2
+
+# Port for the SolarmanV5 protocol (default 8899; change if router port-forwards to a different port)
+inverter_port = 8899
+
+# Serial number of the SOLARMAN datalogger (found on device label)
+inverter_sn = 1234567890
+
+# Inverter rated output power in kilowatts (used for load % calculations)
+inverter_power_kw = 30.0
+
+# Number of MPPT inputs (used for PV string reporting)
+mppt_count = 3
+
+# Enable verbose logging for debugging (true/false)
+verbose = false

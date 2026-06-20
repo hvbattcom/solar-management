@@ -1,0 +1,522 @@
+<!-- Deye Management Panel -->
+<style>
+  .dp {
+    --bg:     #f0f4f8;
+    --card:   #ffffff;
+    --border: #dde2e8;
+    --accent: #0ea5e9;
+    --accent2:#0284c7;
+    --ok:     #16a34a;
+    --err:    #dc2626;
+    --text:   #1e293b;
+    --muted:  #64748b;
+    --r:      8px;
+    font: 15px/1.6 system-ui, sans-serif;
+    color: #1e293b;
+    background: #f0f4f8;
+    color-scheme: light;
+  }
+  .dp *, .dp *::before, .dp *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Header ── */
+  .dp-header {
+    background: var(--accent); color: #fff;
+    padding: 14px 24px; display: flex; align-items: center; gap: 12px;
+  }
+  .dp-header h1 { font-size: 1.2rem; flex: 1; }
+  .dp-header #updated { font-size: 0.82rem; opacity: .85; }
+  .dp-header button {
+    padding: 6px 14px; background: rgba(255,255,255,.2); color: #fff;
+    border: 1px solid rgba(255,255,255,.4); border-radius: 6px;
+    font-size: 0.85rem; cursor: pointer;
+  }
+  .dp-header button:hover { background: rgba(255,255,255,.35); }
+
+  /* ── Layout ── */
+  .dp-main { max-width: 980px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── Card ── */
+  .dp .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 20px; }
+  .dp .card h2 {
+    font-size: .78rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--muted); margin-bottom: 16px;
+  }
+
+  /* ── Fields ── */
+  .dp .field { display: flex; flex-direction: column; gap: 4px; }
+  .dp .field label { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .dp .field input[type=number] {
+    padding: 8px 10px; border: 1px solid #dde2e8 !important; border-radius: 6px;
+    font-size: .95rem; color: #1e293b !important; background: #fff !important; width: 100%;
+  }
+  .dp .field input:focus { outline: 2px solid var(--accent); border-color: transparent !important; }
+
+  .dp .tog { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .dp .tog input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+  .dp .tog span { font-size: .9rem; }
+
+  .dp .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .dp button.primary {
+    padding: 8px 20px; background: var(--accent); color: #fff;
+    border: none; border-radius: 6px; font-size: .9rem; font-weight: 600; cursor: pointer;
+  }
+  .dp button.primary:hover { background: var(--accent2); }
+  .dp button.primary:disabled { opacity: .5; cursor: default; }
+
+  .dp .msg { font-size: .83rem; font-weight: 700; }
+  .dp .msg.ok  { color: var(--ok); }
+  .dp .msg.err { color: var(--err); }
+
+  .dp .setting-rows { display: flex; flex-direction: column; gap: 10px; }
+  .dp .setting-row  { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .dp .setting-row .field { flex: 0 0 260px; }
+  .dp .setting-row .tog   { flex: 1; padding-top: 18px; }
+
+  /* ── TOU table ── */
+  .dp .tou-wrap { overflow-x: auto; }
+  .dp table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .dp th {
+    text-align: left; font-size: .72rem; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted);
+    padding: 6px 8px; border-bottom: 2px solid var(--border); white-space: nowrap;
+  }
+  .dp td { padding: 5px 4px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .dp tr:last-child td { border-bottom: none; }
+
+  .dp td.num { font-weight: 700; color: var(--muted); text-align: center; width: 28px; }
+  .dp td input[type=checkbox] { display: block; margin: auto; width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .dp td input[type=number] {
+    padding: 5px 6px; border: 1px solid #dde2e8 !important; border-radius: 5px;
+    font-size: .86rem; width: 100%; background: #fff !important; color: #1e293b !important;
+  }
+  .dp td input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .dp .col-time { width: 80px; }
+  .dp .col-n    { width: 80px; }
+  .dp .col-cb   { width: 52px; text-align: center; }
+
+  /* ── Time button ── */
+  .dp button.time-btn {
+    width: 100%; padding: 5px 4px;
+    background: #fff; border: 1px solid var(--border); border-radius: 5px;
+    font-size: .9rem; font-family: ui-monospace, monospace;
+    cursor: pointer; text-align: center; color: var(--text);
+  }
+  .dp button.time-btn:hover { border-color: var(--accent); }
+
+  /* ── Drum picker modal ── */
+  .dp-tp-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center; z-index: 99999;
+  }
+  .dp-tp-dialog {
+    background: #fff; border-radius: 20px; width: 280px;
+    overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,.3);
+    user-select: none; font-family: system-ui, sans-serif;
+  }
+  .dp-tp-dialog .tp-header { padding: 16px 16px 12px; text-align: center; font-weight: 700; font-size: 1rem; color: #1e293b; }
+  .dp-tp-dialog .tp-drums  { display: flex; align-items: center; justify-content: center; height: 220px; padding: 0 8px; }
+  .dp-tp-dialog .tp-col    { flex: 1; height: 100%; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
+  .dp-tp-dialog .tp-col:active { cursor: grabbing; }
+  .dp-tp-dialog .tp-items  { position: absolute; width: 100%; will-change: transform; }
+  .dp-tp-dialog .tp-item   { height: 44px; display: flex; align-items: center; justify-content: center; font-size: 1.75rem; font-weight: 500; color: #1e293b; font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; }
+  .dp-tp-dialog .tp-hl     { position: absolute; top: 50%; transform: translateY(-50%); width: 100%; height: 44px; pointer-events: none; border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+  .dp-tp-dialog .tp-col::before, .dp-tp-dialog .tp-col::after { content: ''; position: absolute; left: 0; right: 0; height: 88px; z-index: 1; pointer-events: none; }
+  .dp-tp-dialog .tp-col::before { top: 0;    background: linear-gradient(to bottom, rgba(255,255,255,.97), transparent); }
+  .dp-tp-dialog .tp-col::after  { bottom: 0; background: linear-gradient(to top,    rgba(255,255,255,.97), transparent); }
+  .dp-tp-dialog .tp-sep    { font-size: 2.2rem; font-weight: 700; padding: 0 10px; color: #1e293b; flex-shrink: 0; margin-bottom: 4px; }
+  .dp-tp-dialog .tp-actions { display: flex; border-top: 1px solid #dde2e8; }
+  .dp-tp-dialog .tp-actions button { flex: 1; padding: 15px; border: none; background: none; font-size: .95rem; font-weight: 600; cursor: pointer; }
+  .dp-tp-dialog .tp-actions button:first-child { border-right: 1px solid #dde2e8; color: #64748b; }
+  .dp-tp-dialog .tp-actions button:last-child  { color: var(--accent); }
+  .dp-tp-dialog .tp-actions button:hover { background: #f0f4f8; }
+</style>
+
+<div class="dp">
+  <div class="dp-header">
+    <h1>⚡ Deye Management</h1>
+    <span id="updated">—</span>
+    <button onclick="loadSettings()">↻ Refresh</button>
+  </div>
+
+  <div class="dp-main">
+
+    <!-- General + Battery side by side -->
+    <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+
+      <!-- General Settings -->
+      <div class="card" style="flex:3">
+        <h2>General</h2>
+        <div class="setting-rows">
+          <div class="setting-row">
+            <div class="field">
+              <label>Energy Mode</label>
+              <select id="energy_mode" style="padding:8px 10px;border:1px solid #dde2e8;border-radius:6px;font-size:.95rem;background:#fff;color:#1e293b;width:100%">
+                <option value="Self Use">Self Use</option>
+                <option value="Battery First">Battery First</option>
+                <option value="Load First">Load First</option>
+              </select>
+            </div>
+            <label class="tog">
+              <input type="checkbox" id="grid_charge_enable">
+              <span>Grid Charge Enable</span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="field">
+              <label>Max Sell Power (W)</label>
+              <input type="number" id="max_sell_power_w" min="0" step="10">
+            </div>
+            <label class="tog">
+              <input type="checkbox" id="solar_sell_enable">
+              <span>Solar Sell Enable</span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="field">
+              <label>Grid Peak Shaving Power (W)</label>
+              <input type="number" id="grid_peak_shaving_power_w" min="0" step="10">
+            </div>
+            <label class="tog">
+              <input type="checkbox" id="grid_peak_shaving_on">
+              <span>Peak Shaving</span>
+            </label>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="saveGeneral()">Save</button>
+          <span class="msg" id="general-msg"></span>
+        </div>
+      </div>
+
+      <!-- Battery Settings -->
+      <div class="card" style="flex:2">
+        <h2>Battery</h2>
+        <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:8px 12px;align-items:center">
+          <div></div>
+          <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT1</div>
+          <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT2</div>
+
+          <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Charge</div>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="max_charge_a" min="1" max="300" step="1" style="flex:1;padding:7px 8px;border:1px solid #dde2e8;border-radius:6px;font-size:.92rem">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="bat2_max_charge_a" min="1" max="300" step="1" style="flex:1;padding:7px 8px;border:1px solid #dde2e8;border-radius:6px;font-size:.92rem">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+          </div>
+
+          <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Discharge</div>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="max_discharge_a" min="1" max="300" step="1" style="flex:1;padding:7px 8px;border:1px solid #dde2e8;border-radius:6px;font-size:.92rem">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="bat2_max_discharge_a" min="1" max="300" step="1" style="flex:1;padding:7px 8px;border:1px solid #dde2e8;border-radius:6px;font-size:.92rem">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="saveBattery()">Save</button>
+          <span class="msg" id="battery-msg"></span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- TOU Slots -->
+    <div class="card">
+      <h2>Time of Use — 6 Slots</h2>
+      <div class="tou-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th class="col-cb">Grid ⚡</th>
+              <th class="col-cb">Gen 🔧</th>
+              <th class="col-cb">Sell →</th>
+              <th class="col-time">Start</th>
+              <th class="col-time">End</th>
+              <th class="col-n">Power W</th>
+              <th class="col-n">SOC %</th>
+            </tr>
+          </thead>
+          <tbody id="tou-body"></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button class="primary" onclick="saveTou()">Save All</button>
+        <span class="msg" id="tou-msg"></span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Drum time picker modal -->
+<div id="tp-modal" class="dp-tp-overlay" style="display:none" onclick="if(event.target===this)cancelTimePicker()">
+  <div class="dp-tp-dialog">
+    <div class="tp-header">Set Time</div>
+    <div class="tp-drums">
+      <div class="tp-col" id="tp-hour"></div>
+      <div class="tp-sep">:</div>
+      <div class="tp-col" id="tp-min"></div>
+    </div>
+    <div class="tp-actions">
+      <button onclick="cancelTimePicker()">Cancel</button>
+      <button onclick="confirmTimePicker()">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = "";   // same origin — open http://grafanas-vm:5001/ directly in your browser
+
+/* ── Drum scroll-wheel picker ─────────────────────────────────────────────── */
+const ITEM_H = 44;
+const CTR    = 2 * ITEM_H;
+
+class Drum {
+  constructor(el, count, fmt) {
+    this.count = count;
+    this._maxY = CTR;
+    this._minY = CTR - (count - 1) * ITEM_H;
+    this._y    = CTR;
+    const items = document.createElement('div');
+    items.className = 'tp-items';
+    for (let i = 0; i < count; i++) {
+      const d = document.createElement('div');
+      d.className = 'tp-item';
+      d.textContent = fmt(i);
+      items.appendChild(d);
+    }
+    el.appendChild(items);
+    this._items = items;
+    const hl = document.createElement('div');
+    hl.className = 'tp-hl';
+    el.appendChild(hl);
+    this._bind(el);
+  }
+  get value() {
+    return Math.max(0, Math.min(this.count - 1, Math.round((CTR - this._y) / ITEM_H)));
+  }
+  set value(i) { this._moveTo(CTR - i * ITEM_H, false); }
+  _moveTo(y, anim) {
+    y = Math.max(this._minY, Math.min(this._maxY, y));
+    this._y = y;
+    this._items.style.transition = anim ? 'transform .22s cubic-bezier(.25,.46,.45,.94)' : 'none';
+    this._items.style.transform  = `translateY(${y}px)`;
+  }
+  _fling(y, vel) {
+    const idx = Math.round((CTR - (y + vel * 0.1)) / ITEM_H);
+    this._moveTo(CTR - Math.max(0, Math.min(this.count - 1, idx)) * ITEM_H, true);
+  }
+  _bind(el) {
+    let sy = null, y0, ly, lt, vel;
+    const start = cy => { this._items.style.transition = 'none'; sy = cy; y0 = this._y; ly = cy; lt = Date.now(); vel = 0; };
+    const move  = cy => {
+      if (sy === null) return;
+      const now = Date.now();
+      vel = (cy - ly) / Math.max(1, now - lt) * 1000;
+      ly = cy; lt = now;
+      let y = y0 + (cy - sy);
+      if (y > this._maxY) y = this._maxY + (y - this._maxY) * 0.25;
+      if (y < this._minY) y = this._minY - (this._minY - y) * 0.25;
+      this._y = y;
+      this._items.style.transform = `translateY(${y}px)`;
+    };
+    const end = () => { if (sy !== null) { this._fling(this._y, vel); sy = null; } };
+    el.addEventListener('touchstart', e => { start(e.touches[0].clientY); e.preventDefault(); }, { passive: false });
+    el.addEventListener('touchmove',  e => { move(e.touches[0].clientY);  e.preventDefault(); }, { passive: false });
+    el.addEventListener('touchend',   end);
+    el.addEventListener('mousedown',  e => start(e.clientY));
+    window.addEventListener('mousemove', e => { if (sy !== null) move(e.clientY); });
+    window.addEventListener('mouseup',   () => { if (sy !== null) end(); });
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      const next = Math.max(0, Math.min(this.count - 1, this.value + (e.deltaY > 0 ? 1 : -1)));
+      this._moveTo(CTR - next * ITEM_H, true);
+    }, { passive: false });
+  }
+}
+
+let _tpId = null, _drums = null;
+function _initDrums() {
+  if (_drums) return;
+  const pad = i => String(i).padStart(2, '0');
+  _drums = { h: new Drum(document.getElementById('tp-hour'), 24, pad), m: new Drum(document.getElementById('tp-min'), 60, pad) };
+}
+function openTimePicker(id) {
+  _initDrums();
+  _tpId = id;
+  const [h, m] = (document.getElementById(id).dataset.value || '00:00').split(':').map(Number);
+  _drums.h.value = h; _drums.m.value = m;
+  document.getElementById('tp-modal').style.display = 'flex';
+}
+function confirmTimePicker() {
+  const val = String(_drums.h.value).padStart(2,'0') + ':' + String(_drums.m.value).padStart(2,'0');
+  const btn = document.getElementById(_tpId);
+  btn.textContent = val; btn.dataset.value = val;
+  if (btn.dataset.updates) {
+    const t = document.getElementById(btn.dataset.updates);
+    if (t) { t.textContent = val; t.dataset.value = val; }
+  }
+  document.getElementById('tp-modal').style.display = 'none';
+}
+function cancelTimePicker() { document.getElementById('tp-modal').style.display = 'none'; }
+
+/* ── Helpers ── */
+function flash(id, text, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'msg ' + type;
+  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000);
+}
+
+/* ── Load ── */
+let _snap = null;
+
+async function loadSettings() {
+  try {
+    const res = await fetch(BASE + '/api/settings');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    fillGeneral(d.general);
+    fillBattery(d.battery);
+    fillTou(d.tou.slots);
+    document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('updated').textContent = '⚠ ' + e.message;
+  }
+}
+
+/* ── General ── */
+function fillGeneral(g) {
+  document.getElementById('energy_mode').value              = g.energy_mode;
+  document.getElementById('max_sell_power_w').value         = g.max_sell_power_w;
+  document.getElementById('grid_peak_shaving_on').checked   = g.grid_peak_shaving_on;
+  document.getElementById('grid_peak_shaving_power_w').value = g.grid_peak_shaving_power_w;
+  document.getElementById('grid_charge_enable').checked     = g.grid_charge_enable;
+  document.getElementById('solar_sell_enable').checked      = g.solar_sell_enable;
+}
+
+async function saveGeneral() {
+  const body = {
+    energy_mode:               document.getElementById('energy_mode').value,
+    max_sell_power_w:          parseInt(document.getElementById('max_sell_power_w').value) || 0,
+    grid_peak_shaving_on:      document.getElementById('grid_peak_shaving_on').checked,
+    grid_peak_shaving_power_w: parseInt(document.getElementById('grid_peak_shaving_power_w').value) || 0,
+    grid_charge_enable:        document.getElementById('grid_charge_enable').checked,
+    solar_sell_enable:         document.getElementById('solar_sell_enable').checked,
+  };
+  try {
+    const res  = await fetch(BASE + '/api/settings/general', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (data.ok) { flash('general-msg', '✓ Saved', 'ok'); loadSettings(); }
+    else           flash('general-msg', '✗ ' + data.error, 'err');
+  } catch (e) {   flash('general-msg', '✗ ' + e.message, 'err'); }
+}
+
+/* ── Battery ── */
+function fillBattery(b) {
+  document.getElementById('max_charge_a').value        = b.max_charge_a;
+  document.getElementById('max_discharge_a').value     = b.max_discharge_a;
+  document.getElementById('bat2_max_charge_a').value   = b.bat2_max_charge_a;
+  document.getElementById('bat2_max_discharge_a').value = b.bat2_max_discharge_a;
+}
+
+async function saveBattery() {
+  const body = {
+    max_charge_a:         parseInt(document.getElementById('max_charge_a').value)         || 0,
+    max_discharge_a:      parseInt(document.getElementById('max_discharge_a').value)      || 0,
+    bat2_max_charge_a:    parseInt(document.getElementById('bat2_max_charge_a').value)    || 0,
+    bat2_max_discharge_a: parseInt(document.getElementById('bat2_max_discharge_a').value) || 0,
+  };
+  try {
+    const res  = await fetch(BASE + '/api/settings/battery', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (data.ok) { flash('battery-msg', '✓ Saved', 'ok'); loadSettings(); }
+    else           flash('battery-msg', '✗ ' + data.error, 'err');
+  } catch (e) {   flash('battery-msg', '✗ ' + e.message, 'err'); }
+}
+
+/* ── TOU ── */
+function fillTou(slots) {
+  _snap = slots.map(s => ({...s}));
+  const tbody = document.getElementById('tou-body');
+  tbody.innerHTML = '';
+  slots.forEach((s, idx) => {
+    const nextSlot = (s.slot % 6) + 1;
+    const endTime  = slots[(idx + 1) % 6].time;
+    const tr = document.createElement('tr');
+    tr.id = `tou-row-${s.slot}`;
+    tr.innerHTML = `
+      <td class="num">${s.slot}</td>
+      <td class="col-cb"><input type="checkbox" id="tou-grid-${s.slot}" ${s.grid_charge?'checked':''}></td>
+      <td class="col-cb"><input type="checkbox" id="tou-gen-${s.slot}"  ${s.gen_charge ?'checked':''}></td>
+      <td class="col-cb"><input type="checkbox" id="tou-sell-${s.slot}" ${s.sell       ?'checked':''}></td>
+      <td class="col-time">
+        <button class="time-btn" id="tou-time-${s.slot}" data-value="${s.time}"
+          onclick="openTimePicker('tou-time-${s.slot}')">${s.time}</button>
+      </td>
+      <td class="col-time">
+        <button class="time-btn" id="tou-end-${s.slot}" data-value="${endTime}"
+          data-updates="tou-time-${nextSlot}"
+          onclick="openTimePicker('tou-end-${s.slot}')">${endTime}</button>
+      </td>
+      <td class="col-n"><input type="number" id="tou-pwr-${s.slot}" value="${s.power_w}" min="0" step="10"></td>
+      <td class="col-n"><input type="number" id="tou-soc-${s.slot}" value="${s.soc_pct}" min="0" max="100"></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function _slotChanged(slot) {
+  const prev = _snap?.[slot - 1];
+  if (!prev) return true;
+  const time    = document.getElementById(`tou-time-${slot}`).dataset.value;
+  const power_w = parseInt(document.getElementById(`tou-pwr-${slot}`).value)  || 0;
+  const soc_pct = parseInt(document.getElementById(`tou-soc-${slot}`).value)  || 0;
+  const grid_charge = document.getElementById(`tou-grid-${slot}`).checked;
+  const gen_charge  = document.getElementById(`tou-gen-${slot}`).checked;
+  const sell        = document.getElementById(`tou-sell-${slot}`).checked;
+  return time !== prev.time || power_w !== prev.power_w || soc_pct !== prev.soc_pct
+      || grid_charge !== prev.grid_charge || gen_charge !== prev.gen_charge || sell !== prev.sell;
+}
+
+async function saveTou() {
+  const btn = document.querySelector('[onclick="saveTou()"]');
+  btn.disabled = true;
+
+  const toSave = [1,2,3,4,5,6].filter(_slotChanged).map(slot => ({
+    slot,
+    body: {
+      time:        document.getElementById(`tou-time-${slot}`).dataset.value,
+      power_w:     parseInt(document.getElementById(`tou-pwr-${slot}`).value)  || 0,
+      soc_pct:     parseInt(document.getElementById(`tou-soc-${slot}`).value)  || 0,
+      grid_charge: document.getElementById(`tou-grid-${slot}`).checked,
+      gen_charge:  document.getElementById(`tou-gen-${slot}`).checked,
+      sell:        document.getElementById(`tou-sell-${slot}`).checked,
+    }
+  }));
+
+  if (toSave.length === 0) {
+    btn.disabled = false;
+    flash('tou-msg', '✓ No changes', 'ok');
+    return;
+  }
+
+  const results = await Promise.all(toSave.map(({ slot, body }) =>
+    fetch(`${BASE}/api/settings/tou/${slot}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }))
+  ));
+
+  btn.disabled = false;
+  const failed = results.filter(r => !r.ok);
+  if (failed.length === 0) { flash('tou-msg', `✓ Saved (${toSave.length} slot${toSave.length > 1 ? 's' : ''})`, 'ok'); loadSettings(); }
+  else flash('tou-msg', `✗ ${failed.length} slot(s) failed: ${failed[0].error}`, 'err');
+}
+
+requestAnimationFrame(loadSettings);
+</script>

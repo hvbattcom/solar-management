@@ -1,0 +1,900 @@
+<!-- Solar Inverter Management Panel — shared template for Deye and Solis -->
+<style>
+  :root { --accent: #94a3b8; --accent2: #64748b; }
+
+  .inv {
+    --bg:     #f0f4f8;
+    --card:   #ffffff;
+    --border: #dde2e8;
+    --ok:     #16a34a;
+    --err:    #dc2626;
+    --text:   #1e293b;
+    --muted:  #64748b;
+    --r:      8px;
+    font: 15px/1.6 system-ui, sans-serif;
+    color: #1e293b;
+    background: #f0f4f8;
+    color-scheme: light;
+  }
+  .inv *, .inv *::before, .inv *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Header ── */
+  .inv-header {
+    background: var(--accent); color: #fff;
+    padding: 14px 24px; display: flex; align-items: center; gap: 12px;
+  }
+  .inv-header h1 { font-size: 1.2rem; flex: 1; }
+  .inv-header #updated { font-size: 0.82rem; opacity: .85; }
+  .inv-header button {
+    padding: 6px 14px; background: rgba(255,255,255,.2); color: #fff;
+    border: 1px solid rgba(255,255,255,.4); border-radius: 6px;
+    font-size: 0.85rem; cursor: pointer;
+  }
+  .inv-header button:hover { background: rgba(255,255,255,.35); }
+
+  /* ── Layout ── */
+  .inv-main { max-width: 980px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── Card ── */
+  .inv .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 20px; }
+  .inv .card h2 {
+    font-size: .78rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--muted); margin-bottom: 16px;
+  }
+
+  /* ── Fields ── */
+  .inv .field { display: flex; flex-direction: column; gap: 4px; }
+  .inv .field label { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .inv .field input[type=number] {
+    padding: 8px 10px; border: 1px solid #dde2e8 !important; border-radius: 6px;
+    font-size: .95rem; color: #1e293b !important; -webkit-text-fill-color: #1e293b !important;
+    background: #fff !important; width: 100%;
+  }
+  .inv .field input:focus { outline: 2px solid var(--accent); border-color: transparent !important; }
+  .inv .field input[type=number]:disabled {
+    opacity: .45; cursor: not-allowed;
+    background: #f1f5f9 !important; -webkit-text-fill-color: #94a3b8 !important;
+  }
+
+  /* ── Custom select (avoids Grafana CSS override of native <select>) ── */
+  .inv-sel { position: relative; width: 100%; cursor: pointer; user-select: none; }
+  .inv-sel-val {
+    padding: 8px 32px 8px 10px; border: 1px solid #dde2e8; border-radius: 6px;
+    font-size: .95rem; color: #1e293b; background: #fff !important;
+    display: flex; align-items: center; min-height: 38px;
+  }
+  .inv-sel-val::after { content: '▾'; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: #64748b; pointer-events: none; }
+  .inv-sel.open .inv-sel-val { border-color: var(--accent); outline: 2px solid var(--accent); border-radius: 6px 6px 0 0; }
+  .inv-sel-opts {
+    display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 200;
+    background: #fff; border: 1px solid var(--accent); border-top: none;
+    border-radius: 0 0 6px 6px; box-shadow: 0 6px 16px rgba(0,0,0,.12);
+  }
+  .inv-sel.open .inv-sel-opts { display: block; }
+  .inv-sel-opt { padding: 9px 10px; font-size: .95rem; color: #1e293b; cursor: pointer; }
+  .inv-sel-opt:hover { background: #f0f4f8; }
+  .inv-sel-opt.sel { color: var(--accent); font-weight: 600; }
+
+  /* ── Toggle ── */
+  .inv .tog { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .inv .tog input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+  .inv .tog span { font-size: .9rem; }
+
+  /* ── Actions ── */
+  .inv .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .inv button.primary {
+    padding: 8px 20px; background: var(--accent); color: #fff;
+    border: none; border-radius: 6px; font-size: .9rem; font-weight: 600; cursor: pointer;
+  }
+  .inv button.primary:hover { background: var(--accent2); }
+  .inv button.primary:disabled { opacity: .5; cursor: default; }
+
+  /* ── Messages ── */
+  .inv .msg { font-size: .83rem; font-weight: 700; }
+  .inv .msg.ok  { color: var(--ok); }
+  .inv .msg.err { color: var(--err); }
+
+  /* ── Setting rows ── */
+  .inv .setting-rows { display: flex; flex-direction: column; gap: 10px; }
+  .inv .setting-row  { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .inv .setting-row .field { flex: 0 0 260px; }
+  .inv .setting-row .tog   { flex: 1; padding-top: 18px; }
+
+  /* ── Battery inputs ── */
+  .inv .bat-input {
+    flex: 1; padding: 7px 8px; border-radius: 6px; font-size: .92rem;
+    border: 1px solid #dde2e8 !important;
+    background: #fff !important;
+    color: #1e293b !important;
+    -webkit-text-fill-color: #1e293b !important;
+  }
+
+  /* ── TOU table ── */
+  .inv .tou-wrap { overflow-x: auto; }
+  .inv table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .inv th {
+    text-align: left; font-size: .72rem; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted);
+    padding: 6px 8px; border-bottom: 2px solid var(--border); white-space: nowrap;
+  }
+  .inv td { padding: 5px 4px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .inv tr:last-child td { border-bottom: none; }
+  .inv tr.on td { background: #f0fdf4; }
+  .inv td.num { font-weight: 700; color: var(--muted); text-align: center; width: 28px; }
+  .inv td input[type=checkbox] { display: block; margin: auto; width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .inv td input[type=number] {
+    padding: 5px 6px; border: 1px solid #dde2e8 !important; border-radius: 5px;
+    font-size: .86rem; width: 100%; background: #fff !important;
+    color: #1e293b !important; -webkit-text-fill-color: #1e293b !important;
+  }
+  .inv td input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .inv td input[type=number]:disabled { opacity: .45; cursor: not-allowed; background: #f1f5f9 !important; -webkit-text-fill-color: #94a3b8 !important; }
+  .inv button.time-btn:disabled { opacity: .45; cursor: not-allowed; border-color: var(--border); }
+  .inv .col-time { width: 80px; }
+  .inv .col-n    { width: 84px; }
+  .inv .col-cb   { width: 52px; text-align: center; }
+
+  /* ── Time button ── */
+  .inv button.time-btn {
+    width: 100%; padding: 5px 4px;
+    background: #fff; border: 1px solid var(--border); border-radius: 5px;
+    font-size: .9rem; font-family: ui-monospace, monospace;
+    cursor: pointer; text-align: center; color: var(--text);
+  }
+  .inv button.time-btn:hover { border-color: var(--accent); }
+
+  /* ── Auto-managed switch (Solis only) ── */
+  .auto-switch { display:flex; align-items:center; gap:8px; cursor:pointer; color:#fff; user-select:none; }
+  .auto-switch input { display:none; }
+  .sw-track {
+    width:38px; height:22px; border-radius:11px; flex-shrink:0;
+    background:rgba(255,255,255,0.25); border:1.5px solid rgba(255,255,255,0.45);
+    position:relative; transition:background .2s, border-color .2s;
+  }
+  .sw-thumb {
+    position:absolute; width:15px; height:15px; border-radius:50%;
+    background:#fff; top:2px; left:2px;
+    transition:transform .2s; box-shadow:0 1px 3px rgba(0,0,0,.3);
+  }
+  .auto-switch input:checked + .sw-track { background:rgba(255,255,255,0.92); border-color:rgba(255,255,255,0.92); }
+  .auto-switch input:checked + .sw-track .sw-thumb { transform:translateX(16px); background:var(--accent); }
+  #auto-banner {
+    display: none; background: #dbeafe; border: 1px solid #93c5fd;
+    border-radius: var(--r); padding: 10px 20px; margin: 12px 16px 0;
+    font-size: .85rem; color: #1d4ed8; font-weight: 600; text-align: center;
+  }
+  #auto-banner.visible { display: block; }
+  #main-wrap { position: relative; }
+  #auto-overlay {
+    display: none; position: absolute; inset: 0; z-index: 100;
+    background: rgba(240,244,248,0.35); border-radius: var(--r); cursor: not-allowed;
+  }
+
+  /* ── Drum picker modal ── */
+  .inv-tp-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center; z-index: 99999;
+  }
+  .inv-tp-dialog {
+    background: #fff; border-radius: 20px; width: 280px;
+    overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,.3);
+    user-select: none; font-family: system-ui, sans-serif;
+  }
+  .inv-tp-dialog .tp-header { padding: 16px 16px 12px; text-align: center; font-weight: 700; font-size: 1rem; color: #1e293b; }
+  .inv-tp-dialog .tp-drums  { display: flex; align-items: center; justify-content: center; height: 220px; padding: 0 8px; }
+  .inv-tp-dialog .tp-col    { flex: 1; height: 100%; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
+  .inv-tp-dialog .tp-col:active { cursor: grabbing; }
+  .inv-tp-dialog .tp-items  { position: absolute; width: 100%; will-change: transform; }
+  .inv-tp-dialog .tp-item   { height: 44px; display: flex; align-items: center; justify-content: center; font-size: 1.75rem; font-weight: 500; color: #1e293b; font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; }
+  .inv-tp-dialog .tp-hl     { position: absolute; top: 50%; transform: translateY(-50%); width: 100%; height: 44px; pointer-events: none; border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+  .inv-tp-dialog .tp-col::before, .inv-tp-dialog .tp-col::after { content: ''; position: absolute; left: 0; right: 0; height: 88px; z-index: 1; pointer-events: none; }
+  .inv-tp-dialog .tp-col::before { top: 0;    background: linear-gradient(to bottom, rgba(255,255,255,.97), transparent); }
+  .inv-tp-dialog .tp-col::after  { bottom: 0; background: linear-gradient(to top,    rgba(255,255,255,.97), transparent); }
+  .inv-tp-dialog .tp-sep    { font-size: 2.2rem; font-weight: 700; padding: 0 10px; color: #1e293b; flex-shrink: 0; margin-bottom: 4px; }
+  .inv-tp-dialog .tp-actions { display: flex; border-top: 1px solid #dde2e8; }
+  .inv-tp-dialog .tp-actions button { flex: 1; padding: 15px; border: none; background: none; font-size: .95rem; font-weight: 600; cursor: pointer; }
+  .inv-tp-dialog .tp-actions button:first-child { border-right: 1px solid #dde2e8; color: #64748b; }
+  .inv-tp-dialog .tp-actions button:last-child  { color: var(--accent); }
+  .inv-tp-dialog .tp-actions button:hover { background: #f0f4f8; }
+</style>
+
+<div class="inv">
+  <div class="inv-header">
+    <h1 id="brand-title">Solar Management</h1>
+    <span id="updated">—</span>
+    <label class="auto-switch" id="auto-switch-wrap" style="display:none">
+      <input type="checkbox" id="auto-managed" onchange="setAutoManaged(this.checked)">
+      <div class="sw-track"><div class="sw-thumb"></div></div>
+      <span style="font-size:.85rem">Auto-managed</span>
+    </label>
+    <button onclick="loadSettings()">↻ Refresh</button>
+  </div>
+  <div id="auto-banner">⚙ Dispatcher active — manual edits disabled</div>
+
+  <div id="main-wrap">
+    <div id="auto-overlay"></div>
+    <div class="inv-main">
+
+      <!-- General + Battery side by side -->
+      <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+
+        <!-- General / Storage Settings -->
+        <div class="card" style="flex:3">
+          <h2 id="general-card-title">General</h2>
+          <div class="setting-rows">
+            <!-- Row 1: Mode + Grid Charge -->
+            <div class="setting-row">
+              <div class="field">
+                <label>Mode</label>
+                <div class="inv-sel" id="mode" data-value="" onclick="selToggle(this)">
+                  <div class="inv-sel-val"></div>
+                  <div class="inv-sel-opts"></div>
+                </div>
+              </div>
+              <label class="tog">
+                <input type="checkbox" id="grid_charge">
+                <span id="grid-charge-label">Grid Charge</span>
+              </label>
+            </div>
+            <!-- Row 2: Sell/Export Power + Sell/Export Enable -->
+            <div class="setting-row">
+              <div class="field">
+                <label id="sell-power-label">Sell Power (W)</label>
+                <input type="number" id="sell_power" min="0" step="10">
+              </div>
+              <label class="tog">
+                <input type="checkbox" id="sell_enable" onchange="setSellLock(this.checked)">
+                <span id="sell-enable-label">Solar Sell Enable</span>
+              </label>
+            </div>
+            <!-- Row 3: Peak Shaving Power + Peak Shaving -->
+            <div class="setting-row">
+              <div class="field">
+                <label>Grid Peak Shaving Power (W)</label>
+                <input type="number" id="peak_shaving_power" min="0" step="10">
+              </div>
+              <label class="tog">
+                <input type="checkbox" id="peak_shaving" onchange="setPeakShavingLock(this.checked)">
+                <span>Peak Shaving</span>
+              </label>
+            </div>
+            <!-- Row 4: Battery Reserve — Solis only -->
+            <div class="setting-row" id="reserve-row" style="display:none">
+              <div class="field">
+                <label>Battery Reserve (%)</label>
+                <input type="number" id="battery_reserve_pct" min="0" max="100" step="1">
+              </div>
+              <label class="tog">
+                <input type="checkbox" id="battery_reserve_on" onchange="setReserveLock(this.checked)">
+                <span>Battery Reserve Switch</span>
+              </label>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" onclick="saveGeneral()">Save</button>
+            <span class="msg" id="general-msg"></span>
+          </div>
+        </div>
+
+        <!-- Battery Settings -->
+        <div class="card" style="flex:2">
+          <h2>Battery</h2>
+          <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:8px 12px;align-items:center">
+            <div></div>
+            <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT1</div>
+            <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT2</div>
+
+            <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Charge</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="number" id="bat1_charge" min="1" max="300" step="1" class="bat-input">
+              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="number" id="bat2_charge" min="1" max="300" step="1" class="bat-input">
+              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+            </div>
+
+            <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Discharge</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="number" id="bat1_discharge" min="1" max="300" step="1" class="bat-input">
+              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="number" id="bat2_discharge" min="1" max="300" step="1" class="bat-input">
+              <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" onclick="saveBattery()">Save</button>
+            <span class="msg" id="battery-msg"></span>
+          </div>
+        </div>
+
+      </div><!-- end side-by-side -->
+
+      <!-- Deye TOU (shown for Deye, hidden for Solis) -->
+      <div id="tou-deye" class="card" style="display:none">
+        <h2>Time of Use — 6 Slots</h2>
+        <div class="tou-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th class="col-cb">Grid ⚡</th>
+                <th class="col-cb">Gen 🔧</th>
+                <th class="col-cb">Sell →</th>
+                <th class="col-time">Start</th>
+                <th class="col-time">End</th>
+                <th class="col-n">Power W</th>
+                <th class="col-n">SOC %</th>
+              </tr>
+            </thead>
+            <tbody id="tou-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="saveTou()">Save All</button>
+          <span class="msg" id="tou-msg"></span>
+        </div>
+      </div>
+
+      <!-- Solis TOU: Discharge (shown for Solis, hidden for Deye) -->
+      <div id="tou-solis-discharge" class="card" style="display:none">
+        <h2>TOU — Discharge Slots</h2>
+        <div class="tou-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>En</th>
+                <th class="col-time">Start</th><th class="col-time">End</th>
+                <th class="col-n">Current A</th><th class="col-n">SOC %</th>
+              </tr>
+            </thead>
+            <tbody id="discharge-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="saveAllSlots('discharge')">Save</button>
+          <span class="msg" id="discharge-msg"></span>
+        </div>
+      </div>
+
+      <!-- Solis TOU: Charge (shown for Solis, hidden for Deye) -->
+      <div id="tou-solis-charge" class="card" style="display:none">
+        <h2>TOU — Charge Slots</h2>
+        <div class="tou-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>En</th>
+                <th class="col-time">Start</th><th class="col-time">End</th>
+                <th class="col-n">Current A</th><th class="col-n">SOC %</th>
+              </tr>
+            </thead>
+            <tbody id="charge-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="saveAllSlots('charge')">Save</button>
+          <span class="msg" id="charge-msg"></span>
+        </div>
+      </div>
+
+    </div><!-- inv-main -->
+  </div><!-- main-wrap -->
+</div><!-- inv -->
+
+<!-- Drum time picker modal (outside .inv so position:fixed covers full screen) -->
+<div id="tp-modal" class="inv-tp-overlay" style="display:none" onclick="if(event.target===this)cancelTimePicker()">
+  <div class="inv-tp-dialog">
+    <div class="tp-header">Set Time</div>
+    <div class="tp-drums">
+      <div class="tp-col" id="tp-hour"></div>
+      <div class="tp-sep">:</div>
+      <div class="tp-col" id="tp-min"></div>
+    </div>
+    <div class="tp-actions">
+      <button onclick="cancelTimePicker()">Cancel</button>
+      <button onclick="confirmTimePicker()">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = "";   // set to "http://host:port" when using this file locally or from Grafana
+
+/* ── Brand config ─────────────────────────────────────────────────────────────
+   gf: general API field names  (read from API response, write to API body)
+   bf: battery API field names  (same pattern)
+   powerStep: W rounding for sell/peak power (Solis requires multiples of 100)
+*/
+const BRAND_CFG = {
+  deye: {
+    title:          '⚡ Deye Management',
+    accent:         '#0ea5e9',
+    accent2:        '#0284c7',
+    modeOptions:    ['Self Use', 'Battery First', 'Load First'],
+    generalTitle:   'General',
+    sellPowerLabel: 'Max Sell Power (W)',
+    sellLabel:      'Solar Sell Enable',
+    gridChargeLabel:'Grid Charge Enable',
+    generalEndpoint:'/api/settings/general',
+    powerStep:      10,
+    gf: {
+      mode:         'energy_mode',
+      grid_charge:  'grid_charge_enable',
+      sell_enable:  'solar_sell_enable',
+      sell_power:   'max_sell_power_w',
+      peak_shaving: 'grid_peak_shaving_on',
+      peak_power:   'grid_peak_shaving_power_w',
+    },
+    bf: {
+      bat1_charge:    'max_charge_a',
+      bat2_charge:    'bat2_max_charge_a',
+      bat1_discharge: 'max_discharge_a',
+      bat2_discharge: 'bat2_max_discharge_a',
+    },
+  },
+  solis: {
+    title:          '☀️ Solis Management',
+    accent:         '#f97316',
+    accent2:        '#ea6c0a',
+    modeOptions:    ['Self Use', 'Selling First', 'Off Grid'],
+    generalTitle:   'Storage Settings',
+    sellPowerLabel: 'Max Export Power (W)',
+    sellLabel:      'Allow Export',
+    gridChargeLabel:'Allow Grid Charge',
+    generalEndpoint:'/api/settings/storage',
+    powerStep:      100,
+    gf: {
+      mode:         'mode',
+      grid_charge:  'allow_grid_charge',
+      sell_enable:  'allow_export',
+      sell_power:   'max_export_power_w',
+      peak_shaving: 'peak_shaving_on',
+      peak_power:   'peak_shaving_power_w',
+      reserve:      'battery_reserve_on',
+      reserve_pct:  'battery_reserve_pct',
+    },
+    bf: {
+      bat1_charge:    'bat1_charge_current_a',
+      bat2_charge:    'bat2_charge_current_a',
+      bat1_discharge: 'bat1_discharge_current_a',
+      bat2_discharge: 'bat2_discharge_current_a',
+    },
+  },
+};
+
+let _brand = null;
+let _cfg   = null;
+
+/* ── Brand init ───────────────────────────────────────────────────────────── */
+function applyBrand(info) {
+  _brand = info.brand;
+  _cfg   = BRAND_CFG[_brand];
+
+  // CSS variables on :root so the picker modal (outside .inv) also picks them up
+  document.documentElement.style.setProperty('--accent',  _cfg.accent);
+  document.documentElement.style.setProperty('--accent2', _cfg.accent2);
+
+  document.getElementById('brand-title').textContent       = _cfg.title;
+  document.getElementById('general-card-title').textContent = _cfg.generalTitle;
+  document.getElementById('sell-power-label').textContent  = _cfg.sellPowerLabel;
+  document.getElementById('sell-enable-label').textContent = _cfg.sellLabel;
+  document.getElementById('grid-charge-label').textContent = _cfg.gridChargeLabel;
+
+  // W step on power inputs
+  document.getElementById('sell_power').step        = _cfg.powerStep;
+  document.getElementById('peak_shaving_power').step = _cfg.powerStep;
+
+  // Populate mode options
+  document.querySelector('#mode .inv-sel-opts').innerHTML = _cfg.modeOptions
+    .map((o, i) => `<div class="inv-sel-opt${i===0?' sel':''}" onclick="selPick(this)">${o}</div>`)
+    .join('');
+
+  // Show brand-specific sections
+  if (info.auto_managed) document.getElementById('auto-switch-wrap').style.display = '';
+  if (_brand === 'solis') {
+    document.getElementById('reserve-row').style.display         = '';
+    document.getElementById('tou-solis-discharge').style.display = '';
+    document.getElementById('tou-solis-charge').style.display    = '';
+  } else {
+    document.getElementById('tou-deye').style.display = '';
+  }
+}
+
+/* ── Custom select ────────────────────────────────────────────────────────── */
+function selSet(id, val) {
+  const sel = document.getElementById(id);
+  const opt = [...sel.querySelectorAll('.inv-sel-opt')].find(o => o.textContent === val);
+  if (!opt) return;
+  sel.dataset.value = val;
+  sel.querySelector('.inv-sel-val').textContent = val;
+  sel.querySelectorAll('.inv-sel-opt').forEach(o => o.classList.toggle('sel', o === opt));
+}
+function selToggle(el) {
+  const isOpen = el.classList.contains('open');
+  document.querySelectorAll('.inv-sel.open').forEach(s => s.classList.remove('open'));
+  if (!isOpen) el.classList.add('open');
+}
+function selPick(opt) {
+  selSet(opt.closest('.inv-sel').id, opt.textContent);
+  opt.closest('.inv-sel').classList.remove('open');
+  event.stopPropagation();
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.inv-sel')) document.querySelectorAll('.inv-sel.open').forEach(s => s.classList.remove('open'));
+});
+
+/* ── Drum scroll-wheel picker ─────────────────────────────────────────────── */
+const ITEM_H = 44;
+const CTR    = 2 * ITEM_H;
+
+class Drum {
+  constructor(el, count, fmt) {
+    this.count = count;
+    this._maxY = CTR;
+    this._minY = CTR - (count - 1) * ITEM_H;
+    this._y    = CTR;
+    const items = document.createElement('div');
+    items.className = 'tp-items';
+    for (let i = 0; i < count; i++) {
+      const d = document.createElement('div');
+      d.className = 'tp-item';
+      d.textContent = fmt(i);
+      items.appendChild(d);
+    }
+    el.appendChild(items);
+    this._items = items;
+    const hl = document.createElement('div');
+    hl.className = 'tp-hl';
+    el.appendChild(hl);
+    this._bind(el);
+  }
+  get value() { return Math.max(0, Math.min(this.count - 1, Math.round((CTR - this._y) / ITEM_H))); }
+  set value(i) { this._moveTo(CTR - i * ITEM_H, false); }
+  _moveTo(y, anim) {
+    y = Math.max(this._minY, Math.min(this._maxY, y));
+    this._y = y;
+    this._items.style.transition = anim ? 'transform .22s cubic-bezier(.25,.46,.45,.94)' : 'none';
+    this._items.style.transform  = `translateY(${y}px)`;
+  }
+  _fling(y, vel) {
+    const idx = Math.round((CTR - (y + vel * 0.1)) / ITEM_H);
+    this._moveTo(CTR - Math.max(0, Math.min(this.count - 1, idx)) * ITEM_H, true);
+  }
+  _bind(el) {
+    let sy = null, y0, ly, lt, vel;
+    const start = cy => { this._items.style.transition = 'none'; sy = cy; y0 = this._y; ly = cy; lt = Date.now(); vel = 0; };
+    const move  = cy => {
+      if (sy === null) return;
+      const now = Date.now();
+      vel = (cy - ly) / Math.max(1, now - lt) * 1000;
+      ly = cy; lt = now;
+      let y = y0 + (cy - sy);
+      if (y > this._maxY) y = this._maxY + (y - this._maxY) * 0.25;
+      if (y < this._minY) y = this._minY - (this._minY - y) * 0.25;
+      this._y = y;
+      this._items.style.transform = `translateY(${y}px)`;
+    };
+    const end = () => { if (sy !== null) { this._fling(this._y, vel); sy = null; } };
+    el.addEventListener('touchstart', e => { start(e.touches[0].clientY); e.preventDefault(); }, { passive: false });
+    el.addEventListener('touchmove',  e => { move(e.touches[0].clientY);  e.preventDefault(); }, { passive: false });
+    el.addEventListener('touchend',   end);
+    el.addEventListener('mousedown',  e => start(e.clientY));
+    window.addEventListener('mousemove', e => { if (sy !== null) move(e.clientY); });
+    window.addEventListener('mouseup',   () => { if (sy !== null) end(); });
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      const next = Math.max(0, Math.min(this.count - 1, this.value + (e.deltaY > 0 ? 1 : -1)));
+      this._moveTo(CTR - next * ITEM_H, true);
+    }, { passive: false });
+  }
+}
+
+let _tpId = null, _drums = null;
+function _initDrums() {
+  if (_drums) return;
+  const pad = i => String(i).padStart(2, '0');
+  _drums = { h: new Drum(document.getElementById('tp-hour'), 24, pad), m: new Drum(document.getElementById('tp-min'), 60, pad) };
+}
+function openTimePicker(id) {
+  _initDrums();
+  _tpId = id;
+  const [h, m] = (document.getElementById(id).dataset.value || '00:00').split(':').map(Number);
+  _drums.h.value = h; _drums.m.value = m;
+  document.getElementById('tp-modal').style.display = 'flex';
+}
+function confirmTimePicker() {
+  const val = String(_drums.h.value).padStart(2,'0') + ':' + String(_drums.m.value).padStart(2,'0');
+  const btn = document.getElementById(_tpId);
+  btn.textContent = val; btn.dataset.value = val;
+  // Deye End column propagates to next slot's Start button via data-updates
+  if (btn.dataset.updates) {
+    const t = document.getElementById(btn.dataset.updates);
+    if (t) { t.textContent = val; t.dataset.value = val; }
+  }
+  document.getElementById('tp-modal').style.display = 'none';
+}
+function cancelTimePicker() { document.getElementById('tp-modal').style.display = 'none'; }
+
+/* ── Helpers ──────────────────────────────────────────────────────────────── */
+function flash(id, text, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'msg ' + type;
+  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000);
+}
+
+function _roundW(val) {
+  const s = _cfg.powerStep;
+  return Math.round((parseInt(val) || 0) / s) * s;
+}
+
+/* ── Load settings ────────────────────────────────────────────────────────── */
+async function loadSettings() {
+  try {
+    const res = await fetch(BASE + '/api/settings');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    fillGeneral(_brand === 'deye' ? d.general : d.storage);
+    fillBattery(d.battery);
+    if (_brand === 'deye') {
+      fillTou(d.tou.slots);
+    } else if (d.tou) {
+      fillSlots('discharge', d.tou.discharge_slots);
+      fillSlots('charge',    d.tou.charge_slots);
+    }
+    document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('updated').textContent = '⚠ ' + e.message;
+  }
+}
+
+/* ── General / Storage ────────────────────────────────────────────────────── */
+function setSellLock(on)        { document.getElementById('sell_power').disabled         = !on; }
+function setPeakShavingLock(on) { document.getElementById('peak_shaving_power').disabled  = !on; }
+function setReserveLock(on)     { document.getElementById('battery_reserve_pct').disabled = !on; }
+
+function fillGeneral(g) {
+  const f = _cfg.gf;
+  selSet('mode', g[f.mode]);
+  document.getElementById('grid_charge').checked      = g[f.grid_charge];
+  document.getElementById('sell_enable').checked      = g[f.sell_enable];
+  document.getElementById('sell_power').value         = g[f.sell_power];
+  document.getElementById('peak_shaving').checked     = g[f.peak_shaving];
+  document.getElementById('peak_shaving_power').value = g[f.peak_power];
+  setSellLock(g[f.sell_enable]);
+  setPeakShavingLock(g[f.peak_shaving]);
+  if (_brand === 'solis') {
+    document.getElementById('battery_reserve_on').checked = g[f.reserve];
+    document.getElementById('battery_reserve_pct').value  = g[f.reserve_pct];
+    setReserveLock(g[f.reserve]);
+  }
+}
+
+async function saveGeneral() {
+  const f    = _cfg.gf;
+  const body = {
+    [f.mode]:         document.getElementById('mode').dataset.value,
+    [f.grid_charge]:  document.getElementById('grid_charge').checked,
+    [f.sell_enable]:  document.getElementById('sell_enable').checked,
+    [f.sell_power]:   _roundW(document.getElementById('sell_power').value),
+    [f.peak_shaving]: document.getElementById('peak_shaving').checked,
+    [f.peak_power]:   _roundW(document.getElementById('peak_shaving_power').value),
+  };
+  if (_brand === 'solis') {
+    body[f.reserve]     = document.getElementById('battery_reserve_on').checked;
+    body[f.reserve_pct] = parseInt(document.getElementById('battery_reserve_pct').value) || 0;
+  }
+  try {
+    const res  = await fetch(BASE + _cfg.generalEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (data.ok) { flash('general-msg', '✓ Saved', 'ok'); loadSettings(); }
+    else           flash('general-msg', '✗ ' + data.error, 'err');
+  } catch (e) {   flash('general-msg', '✗ ' + e.message, 'err'); }
+}
+
+/* ── Battery ──────────────────────────────────────────────────────────────── */
+function fillBattery(b) {
+  if (!b) return;
+  const f = _cfg.bf;
+  document.getElementById('bat1_charge').value    = b[f.bat1_charge];
+  document.getElementById('bat1_discharge').value = b[f.bat1_discharge];
+  document.getElementById('bat2_charge').value    = b[f.bat2_charge];
+  document.getElementById('bat2_discharge').value = b[f.bat2_discharge];
+}
+
+async function saveBattery() {
+  const f    = _cfg.bf;
+  const body = {
+    [f.bat1_charge]:    parseFloat(document.getElementById('bat1_charge').value)    || 0,
+    [f.bat1_discharge]: parseFloat(document.getElementById('bat1_discharge').value) || 0,
+    [f.bat2_charge]:    parseFloat(document.getElementById('bat2_charge').value)    || 0,
+    [f.bat2_discharge]: parseFloat(document.getElementById('bat2_discharge').value) || 0,
+  };
+  try {
+    const res  = await fetch(BASE + '/api/settings/battery', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (data.ok) { flash('battery-msg', '✓ Saved', 'ok'); loadSettings(); }
+    else           flash('battery-msg', '✗ ' + data.error, 'err');
+  } catch (e) {   flash('battery-msg', '✗ ' + e.message, 'err'); }
+}
+
+/* ── Deye TOU ─────────────────────────────────────────────────────────────── */
+let _deyeSnap = null;
+
+function fillTou(slots) {
+  _deyeSnap = slots.map(s => ({...s}));
+  const tbody = document.getElementById('tou-body');
+  tbody.innerHTML = '';
+  slots.forEach((s, idx) => {
+    const nextSlot = (s.slot % 6) + 1;
+    const endTime  = slots[(idx + 1) % 6].time;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="num">${s.slot}</td>
+      <td class="col-cb"><input type="checkbox" id="tou-grid-${s.slot}" ${s.grid_charge?'checked':''}></td>
+      <td class="col-cb"><input type="checkbox" id="tou-gen-${s.slot}"  ${s.gen_charge ?'checked':''}></td>
+      <td class="col-cb"><input type="checkbox" id="tou-sell-${s.slot}" ${s.sell       ?'checked':''}></td>
+      <td class="col-time">
+        <button class="time-btn" id="tou-time-${s.slot}" data-value="${s.time}"
+          onclick="openTimePicker('tou-time-${s.slot}')">${s.time}</button>
+      </td>
+      <td class="col-time">
+        <button class="time-btn" id="tou-end-${s.slot}" data-value="${endTime}"
+          data-updates="tou-time-${nextSlot}"
+          onclick="openTimePicker('tou-end-${s.slot}')">${endTime}</button>
+      </td>
+      <td class="col-n"><input type="number" id="tou-pwr-${s.slot}" value="${s.power_w}" min="0" step="10"></td>
+      <td class="col-n"><input type="number" id="tou-soc-${s.slot}" value="${s.soc_pct}" min="0" max="100"></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function _deyeSlotChanged(slot) {
+  const prev = _deyeSnap?.[slot - 1];
+  if (!prev) return true;
+  return document.getElementById(`tou-time-${slot}`).dataset.value !== prev.time
+      || (parseInt(document.getElementById(`tou-pwr-${slot}`).value) || 0) !== prev.power_w
+      || (parseInt(document.getElementById(`tou-soc-${slot}`).value) || 0) !== prev.soc_pct
+      || document.getElementById(`tou-grid-${slot}`).checked !== prev.grid_charge
+      || document.getElementById(`tou-gen-${slot}`).checked  !== prev.gen_charge
+      || document.getElementById(`tou-sell-${slot}`).checked !== prev.sell;
+}
+
+async function saveTou() {
+  const btn = document.querySelector('[onclick="saveTou()"]');
+  btn.disabled = true;
+  const toSave = [1,2,3,4,5,6].filter(_deyeSlotChanged).map(slot => ({
+    slot,
+    body: {
+      time:        document.getElementById(`tou-time-${slot}`).dataset.value,
+      power_w:     parseInt(document.getElementById(`tou-pwr-${slot}`).value)  || 0,
+      soc_pct:     parseInt(document.getElementById(`tou-soc-${slot}`).value)  || 0,
+      grid_charge: document.getElementById(`tou-grid-${slot}`).checked,
+      gen_charge:  document.getElementById(`tou-gen-${slot}`).checked,
+      sell:        document.getElementById(`tou-sell-${slot}`).checked,
+    }
+  }));
+  if (toSave.length === 0) { btn.disabled = false; flash('tou-msg', '✓ No changes', 'ok'); return; }
+  const results = await Promise.all(toSave.map(({ slot, body }) =>
+    fetch(BASE + `/api/settings/tou/${slot}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+      .then(r => r.json()).catch(e => ({ ok:false, error:e.message }))
+  ));
+  btn.disabled = false;
+  const failed = results.filter(r => !r.ok);
+  if (failed.length === 0) { flash('tou-msg', `✓ Saved (${toSave.length} slot${toSave.length>1?'s':''})`, 'ok'); loadSettings(); }
+  else flash('tou-msg', `✗ ${failed.length} slot(s) failed: ${failed[0].error}`, 'err');
+}
+
+/* ── Solis TOU ────────────────────────────────────────────────────────────── */
+const _solisSnap = { charge: null, discharge: null };
+
+function fillSlots(type, slots) {
+  const tbody = document.getElementById(type + '-body');
+  tbody.innerHTML = '';
+  slots.forEach(s => {
+    const tr = document.createElement('tr');
+    if (s.enabled) tr.className = 'on';
+    tr.id = `row-${type}-${s.slot}`;
+    tr.innerHTML = `
+      <td class="num">${s.slot}</td>
+      <td><input type="checkbox" id="${type}-en-${s.slot}" ${s.enabled?'checked':''} onchange="syncRow('${type}',${s.slot})"></td>
+      <td class="col-time">
+        <button class="time-btn" id="${type}-start-${s.slot}" data-value="${s.start}"
+          onclick="openTimePicker('${type}-start-${s.slot}')">${s.start}</button>
+      </td>
+      <td class="col-time">
+        <button class="time-btn" id="${type}-end-${s.slot}" data-value="${s.end}"
+          onclick="openTimePicker('${type}-end-${s.slot}')">${s.end}</button>
+      </td>
+      <td class="col-n"><input type="number" id="${type}-cur-${s.slot}" value="${s.current_a}" min="0" step="0.1"></td>
+      <td class="col-n"><input type="number" id="${type}-soc-${s.slot}" value="${s.soc_pct}"   min="0" max="100"></td>`;
+    tbody.appendChild(tr);
+    lockRow(type, s.slot, s.enabled);
+  });
+  _solisSnap[type] = slots.map(s => ({...s}));
+}
+
+function lockRow(type, slot, on) {
+  [`${type}-start-${slot}`, `${type}-end-${slot}`, `${type}-cur-${slot}`, `${type}-soc-${slot}`]
+    .forEach(id => { const el = document.getElementById(id); if (el) el.disabled = !on; });
+}
+function syncRow(type, slot) {
+  const on = document.getElementById(`${type}-en-${slot}`).checked;
+  document.getElementById(`row-${type}-${slot}`).className = on ? 'on' : '';
+  lockRow(type, slot, on);
+}
+
+function _solisSlotChanged(type, slot, body) {
+  const prev = _solisSnap[type]?.[slot - 1];
+  if (!prev) return true;
+  return body.enabled !== prev.enabled || body.start !== prev.start || body.end !== prev.end
+      || Math.abs(body.current_a - prev.current_a) > 0.001 || body.soc_pct !== prev.soc_pct;
+}
+
+async function saveAllSlots(type) {
+  const btn = document.querySelector(`[onclick="saveAllSlots('${type}')"]`);
+  btn.disabled = true;
+  const toSave = [1,2,3,4,5,6].map(slot => {
+    const body = {
+      enabled:   document.getElementById(`${type}-en-${slot}`).checked,
+      start:     document.getElementById(`${type}-start-${slot}`).dataset.value,
+      end:       document.getElementById(`${type}-end-${slot}`).dataset.value,
+      current_a: parseFloat(document.getElementById(`${type}-cur-${slot}`).value) || 0,
+      soc_pct:   parseInt(document.getElementById(`${type}-soc-${slot}`).value)   || 0,
+    };
+    return _solisSlotChanged(type, slot, body) ? { slot, body } : null;
+  }).filter(Boolean);
+  if (toSave.length === 0) { btn.disabled = false; flash(`${type}-msg`, '✓ No changes', 'ok'); return; }
+  const results = await Promise.all(toSave.map(({ slot, body }) =>
+    fetch(BASE + `/api/settings/tou/${type}/${slot}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+      .then(r => r.json()).catch(e => ({ ok:false, error:e.message }))
+  ));
+  btn.disabled = false;
+  const failed = results.filter(r => !r.ok);
+  if (failed.length === 0) { flash(`${type}-msg`, `✓ Saved (${toSave.length} slot${toSave.length>1?'s':''})`, 'ok'); loadSettings(); }
+  else flash(`${type}-msg`, `✗ ${failed.length} slot(s) failed`, 'err');
+}
+
+/* ── Solis auto-managed ───────────────────────────────────────────────────── */
+let _autoTimer = null;
+
+async function loadAutoManaged() {
+  try {
+    const d = await fetch(BASE + '/api/auto-managed').then(r => r.json());
+    applyAutoMode(d.enabled);
+  } catch (_) {}
+}
+
+async function setAutoManaged(on) {
+  try {
+    await fetch(BASE + '/api/auto-managed', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:on}) });
+    applyAutoMode(on);
+  } catch (e) { flash('general-msg', '✗ ' + e.message, 'err'); }
+}
+
+function applyAutoMode(on) {
+  document.getElementById('auto-managed').checked = on;
+  document.getElementById('auto-overlay').style.display = on ? 'block' : 'none';
+  document.getElementById('auto-banner').classList.toggle('visible', on);
+  clearInterval(_autoTimer);
+  if (on) _autoTimer = setInterval(loadSettings, 30000);
+}
+
+/* ── Init ─────────────────────────────────────────────────────────────────── */
+async function init() {
+  try {
+    const info = await fetch(BASE + '/api/info').then(r => r.json());
+    applyBrand(info);
+    if (info.auto_managed) await loadAutoManaged();
+    await loadSettings();
+  } catch (e) {
+    document.getElementById('updated').textContent = '⚠ ' + e.message;
+  }
+}
+
+requestAnimationFrame(init);
+</script>

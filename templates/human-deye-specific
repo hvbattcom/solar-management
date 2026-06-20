@@ -1,0 +1,12 @@
+
+=== Deye Temperatures ===
+DC Temperature: {{ dc_temperature_c }}°C
+AC Temperature: {{ ac_temperature_c }}°C
+
+=== Time of Use Settings ===
+Grid Charge: {{ grid_charge_enable }}   Solar Sell: {{ solar_sell_enable }}
+_________________________________________________________
+| Grid  | Gen | Sell |    Start   |    End     |   Pwr    | SOC % |
+|--------------------------------------------------------------------
+{% for row in tou_rows %}|   {{ row.grid }}   |  {{ row.gen }}  |   {{ row.sell }}  | {{ row.start }}     | {{ row.end }}    | {{ "%8d" | format(row.power) }} | {{ "%4d" | format(row.soc) }}% |
+{% endfor %}-----------------------------------------------------------------

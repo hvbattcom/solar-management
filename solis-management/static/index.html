@@ -121,6 +121,13 @@
     background: #f1f5f9 !important; -webkit-text-fill-color: #94a3b8 !important;
   }
   .sp button.time-btn:disabled { opacity: .45; cursor: not-allowed; border-color: var(--border); }
+  .sp .bat-input {
+    flex: 1; padding: 7px 8px; border-radius: 6px; font-size: .92rem;
+    border: 1px solid #dde2e8 !important;
+    background: #fff !important;
+    color: #1e293b !important;
+    -webkit-text-fill-color: #1e293b !important;
+  }
 
   /* ── Auto-managed switch ── */
   .auto-switch { display:flex; align-items:center; gap:8px; cursor:pointer; color:#fff; user-select:none; }
@@ -299,22 +306,29 @@
       <!-- Battery Settings -->
       <div class="card" style="flex:2">
         <h2>Battery</h2>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div class="field">
-            <label>BAT1 Charge (A)</label>
-            <input type="number" id="bat1_charge_current_a" min="1" max="200" step="1">
+        <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:8px 12px;align-items:center">
+          <div></div>
+          <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT1</div>
+          <div style="text-align:center;font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted)">BAT2</div>
+
+          <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Charge</div>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="bat1_charge_current_a" min="1" max="200" step="1" class="bat-input">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
           </div>
-          <div class="field">
-            <label>BAT1 Discharge (A)</label>
-            <input type="number" id="bat1_discharge_current_a" min="1" max="200" step="1">
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="bat2_charge_current_a" min="1" max="200" step="1" class="bat-input">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
           </div>
-          <div class="field">
-            <label>BAT2 Charge (A)</label>
-            <input type="number" id="bat2_charge_current_a" min="1" max="200" step="1">
+
+          <div style="font-size:.75rem;font-weight:700;letter-spacing:.06em;color:var(--muted);white-space:nowrap">Discharge</div>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="bat1_discharge_current_a" min="1" max="200" step="1" class="bat-input">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
           </div>
-          <div class="field">
-            <label>BAT2 Discharge (A)</label>
-            <input type="number" id="bat2_discharge_current_a" min="1" max="200" step="1">
+          <div style="display:flex;align-items:center;gap:5px">
+            <input type="number" id="bat2_discharge_current_a" min="1" max="200" step="1" class="bat-input">
+            <span style="font-size:.8rem;color:var(--muted);flex-shrink:0">A</span>
           </div>
         </div>
         <div class="actions">
