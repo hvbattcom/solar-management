@@ -54,6 +54,14 @@
       "discharge_limit_a": {{ battery_discharge_current_limit_bms_a | jv }}
     }
   },
+  "battery2": {% if battery2 is not none %}{
+    "voltage_v": {{ battery2.voltage_v | jv }},
+    "current_a": {{ battery2.current_a | jv }},
+    "power_w": {{ battery2.power_w | jv }},
+    "temperature_c": {{ battery2.temperature_c | jv }},
+    "soc_pct": {{ battery2.soc_pct | jv }},
+    "direction": {{ battery2.direction | jv }}
+  }{% else %}null{% endif %},
   "ac_grid_port_power_w": {{ ac_grid_port_power_w | jv }},
   "household_load_power_w": {{ household_load_power_w | jv }},
   "energy_today": {
