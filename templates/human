@@ -29,7 +29,8 @@ Total Backup Power: {{ backup_load_power_w }}W, PF {{ backup_power_factor }}  [{
 
 === Battery Status ===
 Battery: {{ battery_voltage_v }}V, {{ battery_current_a }}A, {{ battery_power_w }}W, {{ battery_temperature_c }}°C, {{ battery_soc_pct }}%, {{ battery_soh_pct }}% ({{ battery_direction }})
-
+{% if battery2 is not none %}Battery 2: {{ battery2.voltage_v }}V, {{ battery2.current_a }}A, {{ battery2.power_w }}W, {{ battery2.temperature_c }}°C, {{ battery2.soc_pct }}% ({{ battery2.direction }})
+{% endif %}
 === Daily Energy Statistics ===
 PV Generation:       {{ pv_generation_today_kwh }}kWh
 Load Consumption:    {{ load_consumption_today_kwh }}kWh

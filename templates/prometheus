@@ -164,6 +164,30 @@ battery_soc_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_soc_pct }}
 # TYPE battery_soh_pct gauge
 battery_soh_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_soh_pct }}
 
+{% if battery2 is not none %}
+# ── Battery 2 ─────────────────────────────────────────────────────────────────
+
+# HELP battery2_voltage_v Second battery pack voltage volts
+# TYPE battery2_voltage_v gauge
+battery2_voltage_v{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.voltage_v }}
+
+# HELP battery2_current_a Second battery pack current amps
+# TYPE battery2_current_a gauge
+battery2_current_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.current_a }}
+
+# HELP battery2_power_w Second battery pack power watts (positive=charging, negative=discharging)
+# TYPE battery2_power_w gauge
+battery2_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.power_w }}
+
+# HELP battery2_temperature_c Second battery pack temperature celsius
+# TYPE battery2_temperature_c gauge
+battery2_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.temperature_c }}
+
+# HELP battery2_soc_pct Second battery pack state of charge percent
+# TYPE battery2_soc_pct gauge
+battery2_soc_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.soc_pct }}
+
+{% endif %}
 # ── Energy Counters ───────────────────────────────────────────────────────────
 
 # HELP pv_generation_today_kwh PV generation today kWh

@@ -412,6 +412,7 @@ def write_battery_settings(client: ModbusTcpClient, cfg: dict, fields: dict) -> 
 # ── Flask application ─────────────────────────────────────────────────────────
 
 _STATIC    = Path(__file__).resolve().parent / "static"
+_TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 _MAPS_DIR  = Path(__file__).resolve().parent / "maps"
 _AUTO_FILE = Path(__file__).resolve().parent / "auto_managed.json"
 _MAPS_DIR.mkdir(exist_ok=True)
@@ -421,7 +422,11 @@ _cfg: dict = {}   # populated at startup
 
 @app.get("/")
 def index():
-    return send_from_directory(str(_STATIC), "index.html")
+    return send_from_directory(str(_TEMPLATES), "api-index.html")
+
+@app.get("/api/info")
+def api_info():
+    return jsonify({"brand": "solis", "auto_managed": True})
 
 def _err(msg: str, code: int = 400):
     return jsonify({"ok": False, "error": msg}), code
