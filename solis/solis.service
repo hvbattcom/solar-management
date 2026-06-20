@@ -1,0 +1,17 @@
+[Unit]
+Description=Solis Inverter Management API
+After=network.target
+
+[Service]
+Type=simple
+User=solar
+WorkingDirectory=/media/grafanas-vm/solar_planner/solar-management/solis
+ExecStart=/usr/bin/python3 /media/grafanas-vm/solar_planner/solar-management/solis/solis-api.py --host 0.0.0.0 --port 5000
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=solis
+
+[Install]
+WantedBy=multi-user.target
