@@ -1048,6 +1048,7 @@ def build_context(values, cfg):
         "backup_load_month_kwh":     f"{n('backup_load_energy_month'):.1f}",
         "backup_load_year_kwh":      f"{n('backup_load_energy_year'):.1f}",
         "backup_load_total_kwh":     f"{n('backup_load_energy_total'):.1f}",
+        "battery2": None,  # Solis second-battery registers not identified yet
     }
 
 # ── Serial-mismatch error contexts ────────────────────────────────────────────
