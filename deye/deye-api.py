@@ -75,7 +75,7 @@ def load_config(path: Path) -> dict:
     parser.read(str(path))
     srv = parser["DeyeAPI"] if "DeyeAPI" in parser else {}
     cfg["server_host"] = srv.get("host", "0.0.0.0").strip()
-    cfg["server_port"] = int(srv.get("port", 5001))
+    cfg["server_port"] = int(srv.get("port", 5000))
     return cfg
 
 
