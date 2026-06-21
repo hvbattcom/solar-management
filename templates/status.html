@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inverter Status</title>
+  <style>
+    :root {
+      --accent:  #0ea5e9;
+      --accent2: #0284c7;
+      --bg:      #0f172a;
+      --card:    #1e293b;
+      --border:  #334155;
+      --text:    #e2e8f0;
+      --muted:   #94a3b8;
+      --green:   #22c55e;
+      --orange:  #f97316;
+      --blue:    #3b82f6;
+      --yellow:  #eab308;
+      --red:     #ef4444;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif;
+           font-size: 14px; min-height: 100vh; }
+
+    /* ── Header ── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .hd-left { display: flex; align-items: center; gap: 10px; }
+    #brand-title { font-size: 16px; font-weight: 600; color: var(--accent); }
+    .badge {
+      font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+      background: #1e3a4a; color: var(--accent); border: 1px solid var(--accent);
+    }
+    .badge.ok      { background: #14532d; color: var(--green); border-color: var(--green); }
+    .badge.warn    { background: #431407; color: var(--orange); border-color: var(--orange); }
+    .badge.standby { background: #1e293b; color: var(--muted); border-color: var(--muted); }
+    .hd-right { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
+    #refresh-btn {
+      cursor: pointer; background: none; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); font-size: 12px; padding: 3px 8px; display: flex; align-items: center; gap: 4px;
+    }
+    #refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .spin { display: inline-block; }
+    .spinning { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error bar ── */
+    #error-bar {
+      display: none; background: #450a0a; color: #fca5a5; border-bottom: 1px solid #991b1b;
+      padding: 8px 16px; font-size: 13px;
+    }
+
+    /* ── Main layout ── */
+    main { padding: 14px 16px; max-width: 1200px; margin: 0 auto; }
+
+    /* ── Cards ── */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+         margin-bottom: 10px; font-weight: 600; }
+
+    /* ── Summary row ── */
+    .summary-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px;
+    }
+    @media (max-width: 640px) { .summary-grid { grid-template-columns: repeat(2, 1fr); } }
+    .sum-card { text-align: center; padding: 14px 10px; }
+    .sum-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 6px; }
+    .sum-value { font-size: 22px; font-weight: 700; line-height: 1.1; margin-bottom: 4px; }
+    .sum-sub   { font-size: 12px; color: var(--muted); }
+    .col-green  { color: var(--green); }
+    .col-orange { color: var(--orange); }
+    .col-blue   { color: var(--blue); }
+    .col-yellow { color: var(--yellow); }
+    .col-red    { color: var(--red); }
+    .col-muted  { color: var(--muted); }
+
+    /* ── Two-column layout ── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; }
+    th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600;
+         text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--border); }
+    th:first-child { text-align: left; }
+    td { padding: 5px 6px; text-align: right; font-variant-numeric: tabular-nums; }
+    td:first-child { text-align: left; color: var(--muted); }
+    tr:not(:last-child) td { border-bottom: 1px solid #1e293b; }
+    .tbl-total { text-align: right; font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Battery card ── */
+    .soc-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .soc-track { flex: 1; height: 12px; background: var(--border); border-radius: 6px; overflow: hidden; }
+    .soc-fill  { height: 100%; border-radius: 6px; transition: width 0.4s ease, background 0.4s ease; }
+    .soc-pct   { font-size: 18px; font-weight: 700; min-width: 52px; text-align: right; }
+    .bat-detail { display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap; }
+    .bat-detail span { color: var(--muted); }
+    .bat-detail span b { color: var(--text); font-weight: 500; }
+    .bat-dir { margin-top: 6px; font-size: 12px; }
+
+    /* ── Energy grid ── */
+    .energy-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    @media (max-width: 520px) { .energy-grid { grid-template-columns: repeat(2, 1fr); } }
+    .e-cell { background: #0f172a; border-radius: 7px; padding: 10px 12px; }
+    .e-label { font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .e-val   { font-size: 16px; font-weight: 600; }
+
+    /* ── Footer ── */
+    footer { font-size: 11px; color: var(--muted); margin-top: 14px; padding: 8px 0;
+             border-top: 1px solid var(--border); display: flex; gap: 16px; flex-wrap: wrap; }
+    footer span b { color: var(--text); font-weight: 500; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="hd-left">
+    <span id="brand-title">Inverter Status</span>
+    <span id="status-badge" class="badge">—</span>
+  </div>
+  <div class="hd-right">
+    <span id="hd-temps"></span>
+    <button id="refresh-btn" onclick="manualRefresh()">
+      <span id="spin-icon" class="spin">&#8635;</span> Refresh
+    </button>
+  </div>
+</header>
+
+<div id="error-bar"></div>
+
+<main>
+
+  <!-- Summary cards -->
+  <div class="summary-grid">
+    <div class="card sum-card">
+      <div class="sum-label">Solar</div>
+      <div class="sum-value col-green" id="s-solar">—</div>
+      <div class="sum-sub" id="s-solar-sub">—</div>
+    </div>
+    <div class="card sum-card">
+      <div class="sum-label">Grid</div>
+      <div class="sum-value" id="s-grid">—</div>
+      <div class="sum-sub" id="s-grid-sub">—</div>
+    </div>
+    <div class="card sum-card">
+      <div class="sum-label">Battery</div>
+      <div class="sum-value" id="s-bat-soc">—</div>
+      <div class="sum-sub" id="s-bat-sub">—</div>
+    </div>
+    <div class="card sum-card">
+      <div class="sum-label">Load</div>
+      <div class="sum-value col-muted" id="s-load">—</div>
+      <div class="sum-sub">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- PV strings + Battery -->
+  <div class="two-col">
+    <div class="card">
+      <h2>PV Strings</h2>
+      <table>
+        <thead><tr><th>String</th><th>Voltage</th><th>Current</th><th>Power</th></tr></thead>
+        <tbody id="pv-body"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Battery</h2>
+      <div class="soc-row">
+        <div class="soc-track"><div id="soc-fill" class="soc-fill" style="width:0%"></div></div>
+        <div class="soc-pct" id="soc-pct">—%</div>
+      </div>
+      <div class="bat-detail">
+        <span><b id="bat-v">—</b> V</span>
+        <span><b id="bat-a">—</b> A</span>
+        <span><b id="bat-w">—</b> W</span>
+        <span><b id="bat-t">—</b> °C</span>
+      </div>
+      <div class="bat-dir" id="bat-dir">—</div>
+    </div>
+  </div>
+
+  <!-- Grid phases + Backup/Load phases -->
+  <div class="two-col">
+    <div class="card">
+      <h2>Grid Phases</h2>
+      <table>
+        <thead><tr><th>Phase</th><th>Voltage</th><th>Current</th><th>Power</th></tr></thead>
+        <tbody id="grid-body"></tbody>
+      </table>
+      <div class="tbl-total" id="grid-total"></div>
+    </div>
+    <div class="card">
+      <h2>Backup / Load Phases</h2>
+      <table>
+        <thead><tr><th>Phase</th><th>Voltage</th><th>Current</th><th>Power</th></tr></thead>
+        <tbody id="backup-body"></tbody>
+      </table>
+      <div class="tbl-total" id="backup-total"></div>
+    </div>
+  </div>
+
+  <!-- Energy today + total -->
+  <div class="two-col">
+    <div class="card">
+      <h2>Energy Today</h2>
+      <div class="energy-grid">
+        <div class="e-cell"><div class="e-label">Solar</div>      <div class="e-val col-green"  id="e-solar">—</div></div>
+        <div class="e-cell"><div class="e-label">Import</div>     <div class="e-val col-blue"   id="e-import">—</div></div>
+        <div class="e-cell"><div class="e-label">Export</div>     <div class="e-val col-green"  id="e-export">—</div></div>
+        <div class="e-cell"><div class="e-label">Load</div>       <div class="e-val"            id="e-load">—</div></div>
+        <div class="e-cell"><div class="e-label">Bat Charge</div> <div class="e-val col-blue"   id="e-batc">—</div></div>
+        <div class="e-cell"><div class="e-label">Bat Discharge</div><div class="e-val col-orange" id="e-batd">—</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Energy Total</h2>
+      <div class="energy-grid">
+        <div class="e-cell"><div class="e-label">Solar</div>      <div class="e-val col-green"  id="et-solar">—</div></div>
+        <div class="e-cell"><div class="e-label">Import</div>     <div class="e-val col-blue"   id="et-import">—</div></div>
+        <div class="e-cell"><div class="e-label">Export</div>     <div class="e-val col-green"  id="et-export">—</div></div>
+        <div class="e-cell"><div class="e-label">Load</div>       <div class="e-val"            id="et-load">—</div></div>
+        <div class="e-cell"><div class="e-label">Bat Charge</div> <div class="e-val col-blue"   id="et-batc">—</div></div>
+        <div class="e-cell"><div class="e-label">Bat Discharge</div><div class="e-val col-orange" id="et-batd">—</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <span>Updated: <b id="last-update">—</b></span>
+    <span>Serial: <b id="ft-serial">—</b></span>
+    <span>Rated: <b id="ft-rated">—</b></span>
+    <span>AC: <b id="ft-ac-temp">—</b> °C</span>
+    <span>DC: <b id="ft-dc-temp">—</b> °C</span>
+  </footer>
+
+</main>
+
+<script>
+  // Set BASE to "http://host:port" when using this file standalone / from Grafana
+  const BASE = "";
+
+  let _refreshing = false;
+
+  // ── Brand ───────────────────────────────────────────────────────────────────
+  function applyBrand(info) {
+    const brands = {
+      deye:  { title: 'Deye Monitor',  accent: '#0ea5e9', accent2: '#0284c7' },
+      solis: { title: 'Solis Monitor', accent: '#f97316', accent2: '#ea6c0a' },
+    };
+    const b = brands[info.brand] || brands.deye;
+    document.documentElement.style.setProperty('--accent', b.accent);
+    document.documentElement.style.setProperty('--accent2', b.accent2);
+    document.getElementById('brand-title').textContent = b.title;
+    document.title = b.title;
+  }
+
+  // ── Format helpers ──────────────────────────────────────────────────────────
+  function fW(v) {
+    if (v === null || v === undefined || String(v) === 'NaN' || String(v) === 'N/A') return '—';
+    const w = parseFloat(v);
+    if (isNaN(w)) return '—';
+    if (Math.abs(w) >= 1000) return (w / 1000).toFixed(2) + ' kW';
+    return Math.round(w) + ' W';
+  }
+  function fKwh(v) {
+    if (!v || String(v) === 'NaN') return '—';
+    return parseFloat(v).toFixed(2) + ' kWh';
+  }
+  function fV(v)   { return (!v || v === 'NaN') ? '—' : parseFloat(v).toFixed(1); }
+  function fA(v)   { return (!v || v === 'NaN') ? '—' : parseFloat(v).toFixed(2); }
+  function fPct(v) { return (!v || v === 'NaN') ? '—' : parseFloat(v).toFixed(1) + '%'; }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  // render() consumes the nested JSON format produced by the shared `json` Jinja2 template
+  function render(d) {
+    const inv = d.inverter || {};
+    const bat = d.battery  || {};
+    const pv  = d.pv       || {};
+    const et  = d.energy_today  || {};
+    const etot = d.energy_total || {};
+
+    // ── Status badge ─────────────────────────────────────────────────────────
+    const status = inv.status || '';
+    const badge  = document.getElementById('status-badge');
+    badge.textContent = status || '—';
+    badge.className   = 'badge';
+    if (['GridConnected', 'Normal', 'Generating'].includes(status)) badge.classList.add('ok');
+    else if (status === 'Battery')                                   badge.classList.add('warn');
+    else                                                             badge.classList.add('standby');
+
+    document.getElementById('hd-temps').textContent =
+      `AC ${fV(inv.temperature_c)} °C  |  Bat ${fV(bat.temperature_c)} °C`;
+
+    // ── Summary cards ─────────────────────────────────────────────────────────
+    document.getElementById('s-solar').textContent = fW(pv.total_power_w);
+    const pvStrings = pv.strings || [];
+    const activePv  = pvStrings.filter(s => parseFloat(s.power_w) > 0).length;
+    document.getElementById('s-solar-sub').textContent =
+      activePv + ' string' + (activePv === 1 ? '' : 's') + ' active';
+
+    const gridW   = parseFloat(d.grid?.total_power_w) || 0;
+    const gridDir = gridW >= 0 ? 'Importing' : 'Exporting';
+    const gridEl  = document.getElementById('s-grid');
+    gridEl.textContent = fW(Math.abs(gridW));
+    gridEl.className   = 'sum-value ' + (gridW < 0 ? 'col-green' : gridW > 0 ? 'col-orange' : 'col-muted');
+    document.getElementById('s-grid-sub').textContent = gridDir;
+
+    const socPct = parseFloat(bat.soc_pct) || 0;
+    const batW   = parseFloat(bat.power_w) || 0;
+    const batEl  = document.getElementById('s-bat-soc');
+    batEl.textContent = fPct(bat.soc_pct);
+    batEl.className   = 'sum-value ' + (socPct > 50 ? 'col-green' : socPct > 20 ? 'col-yellow' : 'col-red');
+    document.getElementById('s-bat-sub').textContent = (bat.direction || '—') + ' ' + fW(Math.abs(batW));
+
+    document.getElementById('s-load').textContent = fW(d.backup?.total_power_w);
+
+    // ── PV strings ────────────────────────────────────────────────────────────
+    const pvBody = document.getElementById('pv-body');
+    pvBody.innerHTML = '';
+    pvStrings.forEach(row => {
+      const active = parseFloat(row.power_w) > 0;
+      const tr = document.createElement('tr');
+      tr.style.opacity = active ? '1' : '0.4';
+      tr.innerHTML = `
+        <td>${row.name}</td>
+        <td>${fV(row.voltage_v)} V</td>
+        <td>${fA(row.current_a)} A</td>
+        <td${active ? ' style="color:var(--green)"' : ''}>${fW(row.power_w)}</td>`;
+      pvBody.appendChild(tr);
+    });
+
+    // ── Battery ───────────────────────────────────────────────────────────────
+    const fillColor = socPct > 50 ? 'var(--green)' : socPct > 20 ? 'var(--yellow)' : 'var(--red)';
+    document.getElementById('soc-fill').style.width      = socPct + '%';
+    document.getElementById('soc-fill').style.background = fillColor;
+    document.getElementById('soc-pct').textContent       = fPct(bat.soc_pct);
+    document.getElementById('soc-pct').style.color       = fillColor;
+    document.getElementById('bat-v').textContent = fV(bat.voltage_v);
+    document.getElementById('bat-a').textContent = fA(bat.current_a);
+    document.getElementById('bat-w').textContent = Math.round(batW);
+    document.getElementById('bat-t').textContent = fV(bat.temperature_c);
+    const dirEl = document.getElementById('bat-dir');
+    dirEl.textContent = bat.direction || '—';
+    dirEl.style.color = bat.direction === 'Discharging' ? 'var(--orange)'
+                      : bat.direction === 'Charging'    ? 'var(--blue)'
+                      : 'var(--muted)';
+
+    // ── Phase tables ──────────────────────────────────────────────────────────
+    function fillPhases(bodyId, phases) {
+      const body = document.getElementById(bodyId);
+      body.innerHTML = '';
+      (phases || []).forEach(row => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${row.name}</td>
+          <td>${fV(row.voltage_v)} V</td>
+          <td>${fA(row.current_a)} A</td>
+          <td>${fW(row.power_w)}</td>`;
+        body.appendChild(tr);
+      });
+    }
+    fillPhases('grid-body',   d.grid?.phases);
+    fillPhases('backup-body', d.backup?.phases);
+
+    document.getElementById('grid-total').innerHTML =
+      (gridDir === 'Exporting' ? '&#8593; Export total' : '&#8595; Import total') +
+      ': ' + fW(Math.abs(gridW));
+    document.getElementById('backup-total').textContent = 'Total: ' + fW(d.backup?.total_power_w);
+
+    // ── Energy today ──────────────────────────────────────────────────────────
+    document.getElementById('e-solar').textContent  = fKwh(et.pv_generation_kwh);
+    document.getElementById('e-import').textContent = fKwh(et.grid_import_kwh);
+    document.getElementById('e-export').textContent = fKwh(et.grid_export_kwh);
+    document.getElementById('e-load').textContent   = fKwh(et.load_consumption_kwh);
+    document.getElementById('e-batc').textContent   = fKwh(et.battery_charge_kwh);
+    document.getElementById('e-batd').textContent   = fKwh(et.battery_discharge_kwh);
+
+    // ── Energy total ──────────────────────────────────────────────────────────
+    document.getElementById('et-solar').textContent  = fKwh(etot.pv_generation_kwh);
+    document.getElementById('et-import').textContent = fKwh(etot.grid_import_kwh);
+    document.getElementById('et-export').textContent = fKwh(etot.grid_export_kwh);
+    document.getElementById('et-load').textContent   = fKwh(etot.load_consumption_kwh);
+    document.getElementById('et-batc').textContent   = fKwh(etot.battery_charge_kwh);
+    document.getElementById('et-batd').textContent   = fKwh(etot.battery_discharge_kwh);
+
+    // ── Footer ────────────────────────────────────────────────────────────────
+    document.getElementById('ft-serial').textContent = inv.serial || '—';
+    document.getElementById('ft-rated').textContent  =
+      inv.rated_power_w ? (inv.rated_power_w / 1000).toFixed(1) + ' kW' : '—';
+    document.getElementById('ft-ac-temp').textContent = fV(inv.temperature_c);
+    document.getElementById('ft-dc-temp').textContent = '—';
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  }
+
+  // ── Data loading ────────────────────────────────────────────────────────────
+  async function loadStatus() {
+    _refreshing = true;
+    document.getElementById('spin-icon').classList.add('spinning');
+    try {
+      const d = await fetch(BASE + '/api/status').then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+      render(d);
+      document.getElementById('error-bar').style.display = 'none';
+    } catch(e) {
+      const eb = document.getElementById('error-bar');
+      eb.textContent = 'Poll error: ' + e.message;
+      eb.style.display = 'block';
+    } finally {
+      _refreshing = false;
+      document.getElementById('spin-icon').classList.remove('spinning');
+    }
+  }
+
+  async function manualRefresh() {
+    if (_refreshing) return;
+    await loadStatus();
+  }
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  async function init() {
+    try {
+      const info = await fetch(BASE + '/api/info').then(r => r.json());
+      applyBrand(info);
+    } catch(_) {}
+    await loadStatus();
+  }
+
+  init();
+</script>
+</body>
+</html>

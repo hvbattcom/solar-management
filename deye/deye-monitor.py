@@ -90,6 +90,8 @@ REGISTER_DEFINITIONS = {
     0x021C: {'name': 'DC Temperature',   'scale': 0.1,  'unit': '°C','group': 'inverter', 'signed': True, 'offset': 1000},
     0x021D: {'name': 'AC Temperature',   'scale': 0.1,  'unit': '°C','group': 'inverter', 'signed': True, 'offset': 1000},
 
+    0x0016: {'name': 'PV/Phase Config', 'scale': 1, 'unit': '', 'group': 'inverter', 'signed': False},
+
     # TOU / settings (holding registers)
     130:    {'name': 'Grid Charge Enable',    'scale': 1, 'unit': '', 'group': 'tou', 'signed': False},
     145:    {'name': 'Solar Sell Enable',     'scale': 1, 'unit': '', 'group': 'tou', 'signed': False},
@@ -137,13 +139,56 @@ def _scaled_value(reg: int, raw) -> float:
         value = abs(value - meta['offset'])
     return float(value) * float(meta.get('scale', 1))
 
+# ── SN probe (discovery) ──────────────────────────────────────────────────────
+# SolarmanV5 requires the logger SN in every request, but the device always
+# echoes its real SN in bytes 7-10 of any response.  Sending SN=0 lets us
+# read the SN without knowing it in advance.
+
+def _crc16(data: bytes) -> int:
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if (crc & 1) else crc >> 1
+    return crc
+
+def probe_sn(ip: str, port: int = 8899, timeout: float = 5.0) -> int | None:
+    """Connect to a Deye datalogger and return its logger SN without knowing it."""
+    import socket, struct
+    mb = struct.pack(">BBHH", 1, 3, 33004, 1)
+    mb += struct.pack("<H", _crc16(mb))
+    payload_len = 15 + len(mb)
+    frame = bytearray()
+    frame += b"\xA5"
+    frame += struct.pack("<H", payload_len)
+    frame += struct.pack("<H", 0x4510)      # control: data transfer request
+    frame += b"\x01\x00"                    # sequence
+    frame += b"\x00\x00\x00\x00"           # logger SN = 0 (probe)
+    frame += b"\x02\x00\x00"               # frame type + sensor type
+    frame += b"\x00\x00\x00\x00" * 3      # deliver/power-on/offset times
+    frame += mb
+    frame += b"\x00\x15"                   # checksum placeholder + end
+    frame[-2] = sum(frame[1:-2]) & 0xFF
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.sendall(bytes(frame))
+            sock.settimeout(timeout)
+            data = sock.recv(256)
+        if len(data) >= 11 and data[0] == 0xA5:
+            (sn,) = struct.unpack("<I", data[7:11])
+            return sn if sn else None
+    except Exception:
+        pass
+    return None
+
+
 # ── Data reading ──────────────────────────────────────────────────────────────
 
 def _bulk_read(ip: str, sn: int, port: int = 8899, verbose: bool = False) -> dict:
     if PySolarmanV5 is None:
-        print("ERROR: pysolarmanv5 not installed. Run: pip install pysolarmanv5", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("pysolarmanv5 not installed — run: pip install pysolarmanv5")
     ranges = [
+        {'start': 0x0016, 'count': 1},    # PV/phase config
         {'start': 0x0094, 'count': 84},   # TOU + battery config
         {'start': 0x0202, 'count': 32},   # energy stats
         {'start': 0x024A, 'count': 68},   # live status
@@ -167,9 +212,8 @@ def _calc_32bit(low, high) -> float:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-def load_config() -> dict:
-    script_dir = Path(__file__).resolve().parent
-    cfg_path   = script_dir / CONFIG_FILE
+def load_config(path: Path = None) -> dict:
+    cfg_path = Path(path) if path else Path(__file__).resolve().parent / CONFIG_FILE
 
     cfg = configparser.ConfigParser()
     if not cfg_path.exists():
@@ -193,7 +237,6 @@ def load_config() -> dict:
         "brand":          "deye",
         "verbose":        sec.getboolean("verbose", fallback=False),
         "inverter_power_w": sec.getfloat("inverter_power_kw", fallback=8.0) * 1000.0,
-        "mppt_count":     sec.getint("mppt_count", fallback=4),
     }
 
 # ── Numeric helpers ───────────────────────────────────────────────────────────
@@ -219,13 +262,13 @@ def _safe_div(a, b):
 
 # ── Section builders ──────────────────────────────────────────────────────────
 
-def _pv_rows(get):
+def _pv_rows(get, mppt_count: int):
     spec = [
         ('PV1', 0x02A4, 0x02A5, 0x02A0),
         ('PV2', 0x02A6, 0x02A7, 0x02A1),
         ('PV3', 0x02A8, 0x02A9, 0x02A2),
         ('PV4', 0x02AA, 0x02AB, 0x02A3),
-    ]
+    ][:mppt_count]
     rows, active, total = [], 0, 0.0
     for name, v_r, c_r, p_r in spec:
         v, c, p = get(v_r), get(c_r), get(p_r)
@@ -272,8 +315,10 @@ def build_context(raw: dict, cfg: dict) -> dict:
     def get(reg: int) -> float:
         return _scaled_value(reg, raw.get(reg))
 
-    rated_w     = cfg["inverter_power_w"]
-    mppt_count  = cfg["mppt_count"]
+    rated_w    = cfg["inverter_power_w"]
+    raw_cfg    = raw.get(0x0016, 0)
+    mppt_from_reg = raw_cfg >> 8   # high byte = MPPT count
+    mppt_count = mppt_from_reg if 1 <= mppt_from_reg <= 4 else 4
     per_phase_w = rated_w / 3.0
 
     # ── Status (derived – no dedicated register on Deye) ─────────────────────
@@ -284,7 +329,7 @@ def build_context(raw: dict, cfg: dict) -> dict:
     else:                status = "Standby"
 
     # ── PV strings ────────────────────────────────────────────────────────────
-    pv_raw, active_pv, pv_total_power = _pv_rows(get)
+    pv_raw, active_pv, pv_total_power = _pv_rows(get, mppt_count)
     pv_strings = [
         {"name": r["name"], "voltage": fmt1(r["voltage"]),
          "current": fmt2(r["current"]), "power": fmt0(r["power"])}
@@ -471,6 +516,11 @@ def build_context(raw: dict, cfg: dict) -> dict:
         # ── Deye-specific extras (for deye-specific templates) ────────────────
         "dc_temperature_c":      fmt1(get(0x021C)),
         "ac_temperature_c":      fmt1(get(0x021D)),
+        "temperatures": [
+            {"sensor": "DC",   "value": fmt1(get(0x021C))},
+            {"sensor": "AC",   "value": fmt1(get(0x021D))},
+            {"sensor": "BAT1", "value": fmt1(get(0x024A))},
+        ],
         "grid_charge_enable":    "Yes" if grid_chg_en   else "No",
         "solar_sell_enable":     "Yes" if solar_sell_en else "No",
         "grid_charge_enable_num": 1 if grid_chg_en   else 0,
@@ -487,8 +537,7 @@ DUMP_DEFAULT_END   = 0x02B0
 def _scan_holding(ip: str, sn: int, port: int, start: int, end: int, verbose: bool) -> dict:
     """Read all holding registers in [start, end] in chunks, gracefully skipping failures."""
     if PySolarmanV5 is None:
-        print("ERROR: pysolarmanv5 not installed.", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("pysolarmanv5 not installed — run: pip install pysolarmanv5")
     inv    = PySolarmanV5(ip, sn, port=port)
     regmap = {}
     addr   = start
@@ -540,7 +589,10 @@ def dump_storage(ip: str, sn: int, port: int, start: int, end: int, verbose: boo
             if offset:
                 v = abs(v - offset)
             scaled = v * scale
-            label  = f"{meta['name']}  →  {scaled:.4g} {unit}".rstrip()
+            if reg == 0x0016:
+                label = f"PV/Phase Config  →  mppt={val >> 8}  phases={val & 0xFF}"
+            else:
+                label = f"{meta['name']}  →  {scaled:.4g} {unit}".rstrip()
             print(f"  0x{reg:04X}  {reg:6d}  {val:6d}  0x{val:04X}  {label}")
         elif val != 0:
             # Unknown register – only print if non-zero
@@ -594,6 +646,9 @@ def get_jinja_env():
     return env
 
 def render(fmt: str, ctx: dict, deye_specific: bool = True):
+    print(render_to_str(fmt, ctx, deye_specific=deye_specific))
+
+def render_to_str(fmt: str, ctx: dict, deye_specific: bool = True) -> str:
     env    = get_jinja_env()
     output = env.get_template(fmt).render(**ctx)
     if deye_specific:
@@ -602,7 +657,11 @@ def render(fmt: str, ctx: dict, deye_specific: bool = True):
             output   = output.rstrip("\n") + "\n" + specific
         except Exception:
             pass
-    print(output)
+    return output
+
+def poll(cfg: dict) -> dict:
+    raw = _bulk_read(cfg["ip"], cfg["sn"], port=cfg["port"], verbose=cfg.get("verbose", False))
+    return build_context(raw, cfg)
 
 # ── CLI / main ────────────────────────────────────────────────────────────────
 
@@ -623,11 +682,49 @@ def parse_args():
             "Examples: --dump-storage   --dump-storage 0x60 0xFF   --dump-storage 100 200"
         ),
     )
+    parser.add_argument("--ip", metavar="IP",
+                        help="Override inverter_ip from config (useful for discovery)")
+    parser.add_argument("--port", type=int, metavar="PORT",
+                        help="Override inverter_port from config")
+    parser.add_argument("--sn", type=int, metavar="SN",
+                        help="Override inverter_sn (datalogger serial) from config")
+    parser.add_argument("--show-serial", action="store_true",
+                        help="Connect and print the datalogger serial number then exit")
     return parser.parse_args()
 
 def main():
     args = parse_args()
-    cfg  = load_config()
+
+    cfg_path = Path(__file__).resolve().parent / CONFIG_FILE
+    if args.ip and not cfg_path.exists():
+        cfg = {
+            "ip":               args.ip,
+            "port":             args.port or 8899,
+            "sn":               args.sn or 0,
+            "brand":            "deye",
+            "verbose":          False,
+            "inverter_power_w": 30000.0,
+        }
+    else:
+        cfg = load_config()
+
+    if args.ip:
+        cfg["ip"] = args.ip
+    if args.port:
+        cfg["port"] = args.port
+    if args.sn:
+        cfg["sn"] = args.sn
+
+    if args.show_serial:
+        if not cfg.get("sn"):
+            sn = probe_sn(cfg["ip"], cfg["port"])
+            print(sn if sn else "unknown")
+        else:
+            inv = PySolarmanV5(cfg["ip"], cfg["sn"], port=cfg["port"])
+            inv.read_holding_registers(0x02A0, 1)  # minimal read to confirm connection
+            inv.disconnect()
+            print(cfg["sn"])
+        return
 
     if args.dump_storage is not None:
         range_args = args.dump_storage

@@ -19,14 +19,10 @@ inverter_rated_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_ra
 # TYPE inverter_mppt_count gauge
 inverter_mppt_count{brand="{{ brand }}",serial="{{ serial }}"} {{ mppt_count }}
 
-# HELP inverter_temperature_c Inverter DC temperature celsius
+# HELP inverter_temperature_c Temperature celsius
 # TYPE inverter_temperature_c gauge
-inverter_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_temperature_c }}
-
-# HELP battery_temperature_c Battery temperature celsius
-# TYPE battery_temperature_c gauge
-battery_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_temperature_c }}
-
+{% for t in temperatures %}inverter_temperature_c{brand="{{ brand }}",serial="{{ serial }}",sensor="{{ t.sensor }}"} {{ t.value }}
+{% endfor %}
 # HELP grid_frequency_hz Grid frequency hertz
 # TYPE grid_frequency_hz gauge
 grid_frequency_hz{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_frequency_hz }}
@@ -178,10 +174,6 @@ battery2_current_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.curren
 # HELP battery2_power_w Second battery pack power watts (positive=charging, negative=discharging)
 # TYPE battery2_power_w gauge
 battery2_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.power_w }}
-
-# HELP battery2_temperature_c Second battery pack temperature celsius
-# TYPE battery2_temperature_c gauge
-battery2_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ battery2.temperature_c }}
 
 # HELP battery2_soc_pct Second battery pack state of charge percent
 # TYPE battery2_soc_pct gauge

@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
 """
-solis-api.py — Flask HTTP API for writing Solis inverter settings over Modbus.
+solis-api.py — Flask HTTP API for Solis inverter settings and live status.
 
-Reads:
-  GET /api/settings  — storage + TOU holding registers (fast)
-  GET /api/status    — full inverter poll via solis-monitor.py --format json (slow)
+Read endpoints:
+  GET /          — management UI (templates/api-index.html)
+  GET /status    — live status dashboard (templates/status.html)
+  GET /api/info  — brand + feature flags (instant, hardcoded)
+  GET /api/settings  — storage + TOU + battery holding registers
+  GET /api/status    — full live poll as JSON (via solis-monitor.py)
+  GET /metrics       — Prometheus text format
+  GET /human         — human-readable text (terminal format)
 
-Writes (partial update — only fields present in the body are changed):
+Write endpoints (partial update — only fields present in the body are changed):
   POST /api/settings/storage
-  POST /api/settings/tou/charge/<1-6>
-  POST /api/settings/tou/discharge/<1-6>
+  POST /api/settings/battery
+  POST /api/settings/tou/<charge|discharge>/<1-6>
+  POST /api/settings/tou/discharge/all
 
 All write responses: {"ok": true} or {"ok": false, "error": "..."}
 """
 
 import argparse
 import configparser
+import importlib.util
 import json
-import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+# ── Load solis-monitor as a module (hyphen in filename requires importlib) ─────
+_monitor_path = Path(__file__).resolve().parent / "solis-monitor.py"
+_spec         = importlib.util.spec_from_file_location("solis_monitor", str(_monitor_path))
+_monitor      = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_monitor)
 
 from flask import Flask, jsonify, request, send_from_directory
 from pymodbus.client import ModbusTcpClient
@@ -72,7 +84,7 @@ TOU_VOLTAGE_SCALE       = 10      # register value = volts × 10
 
 # ── Config loading ────────────────────────────────────────────────────────────
 
-_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "solis-monitor" / "config.cfg"
+_DEFAULT_CONFIG = Path(__file__).resolve().parent / "config.cfg"
 
 def load_config(path: Path) -> dict:
     cfg = configparser.ConfigParser()
@@ -85,8 +97,7 @@ def load_config(path: Path) -> dict:
         "port":           int(sec.get("inverter_port", 502)),
         "slave_id":       int(sec.get("slave_id", 1)),
         "use_zero_based": use_zb,
-        "monitor_script": str(Path(__file__).resolve().parent.parent / "solis-monitor" / "solis-monitor.py"),
-        "server_host":    srv.get("host", "127.0.0.1").strip(),
+        "server_host":    srv.get("host", "0.0.0.0").strip(),
         "server_port":    int(srv.get("port", 5000)),
     }
 
@@ -411,18 +422,22 @@ def write_battery_settings(client: ModbusTcpClient, cfg: dict, fields: dict) -> 
 
 # ── Flask application ─────────────────────────────────────────────────────────
 
-_STATIC    = Path(__file__).resolve().parent / "static"
 _TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 _MAPS_DIR  = Path(__file__).resolve().parent / "maps"
 _AUTO_FILE = Path(__file__).resolve().parent / "auto_managed.json"
 _MAPS_DIR.mkdir(exist_ok=True)
 
-app = Flask(__name__, static_folder=str(_STATIC), static_url_path="/static")
-_cfg: dict = {}   # populated at startup
+app = Flask(__name__)
+_cfg: dict         = {}   # api config  (ip, port, server_host, …)
+_monitor_cfg: dict = {}   # monitor config (ranges, zeros_ok, expected_serial, …)
 
 @app.get("/")
 def index():
     return send_from_directory(str(_TEMPLATES), "api-index.html")
+
+@app.get("/status")
+def status_page():
+    return send_from_directory(str(_TEMPLATES), "status.html")
 
 @app.get("/api/info")
 def api_info():
@@ -449,15 +464,26 @@ def api_get_settings():
 @app.get("/api/status")
 def api_get_status():
     try:
-        result = subprocess.run(
-            [sys.executable, _cfg["monitor_script"], "--format", "json"],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode not in (0, 2):
-            return _err(f"solis-monitor exited {result.returncode}: {result.stderr[:300]}", 502)
-        return app.response_class(result.stdout, mimetype="application/json")
-    except subprocess.TimeoutExpired:
-        return _err("solis-monitor poll timed out", 504)
+        ctx = _monitor.poll(_monitor_cfg)
+        return app.response_class(_monitor.render_to_str("json", ctx), mimetype="application/json")
+    except Exception as exc:
+        return _err(str(exc), 502)
+
+
+@app.get("/metrics")
+def api_metrics():
+    try:
+        ctx = _monitor.poll(_monitor_cfg)
+        return app.response_class(_monitor.render_to_str("prometheus", ctx), mimetype="text/plain; version=0.0.4")
+    except Exception as exc:
+        return _err(str(exc), 502)
+
+
+@app.get("/human")
+def api_human():
+    try:
+        ctx = _monitor.poll(_monitor_cfg)
+        return app.response_class(_monitor.render_to_str("human", ctx), mimetype="text/plain; charset=utf-8")
     except Exception as exc:
         return _err(str(exc), 502)
 
@@ -638,22 +664,22 @@ def api_set_auto_managed():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    global _cfg
+    global _cfg, _monitor_cfg
     parser = argparse.ArgumentParser(description="Solis management HTTP API")
-    parser.add_argument("--config", default=str(_DEFAULT_CONFIG),
-                        help="Path to config.cfg (default: ../solis-monitor/config.cfg)")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--config", default=str(_DEFAULT_CONFIG))
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
     try:
-        _cfg = load_config(Path(args.config))
+        _cfg         = load_config(Path(args.config))
+        _monitor_cfg = _monitor.load_config(Path(args.config))
     except Exception as exc:
         sys.exit(f"Config error: {exc}")
 
-    host = args.host if args.host != "127.0.0.1" else _cfg["server_host"]
-    port = args.port if args.port != 5000       else _cfg["server_port"]
+    host = args.host or _cfg["server_host"]
+    port = args.port or _cfg["server_port"]
     print(f"Solis API → {_cfg['ip']}:{_cfg['port']}  (slave {_cfg['slave_id']})", flush=True)
     app.run(host=host, port=port, debug=args.debug)
 
