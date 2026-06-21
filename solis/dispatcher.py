@@ -30,7 +30,7 @@ from pathlib import Path
 _MAPS_DIR    = Path(__file__).resolve().parent / "maps"
 _STATE_FILE  = Path(__file__).resolve().parent / "dispatcher_state.json"
 _LOG_FILE    = Path(__file__).resolve().parent / "dispatcher.log"
-_DEFAULT_CFG = Path(__file__).resolve().parent.parent / "solis-monitor" / "config.cfg"
+_DEFAULT_CFG = Path(__file__).resolve().parent / "config.cfg"
 EVENT_TOLERANCE_MIN = 3
 
 
