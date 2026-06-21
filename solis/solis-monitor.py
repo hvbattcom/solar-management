@@ -23,6 +23,7 @@ import configparser
 import json
 import math
 import re
+import struct
 import sys
 import time
 from pathlib import Path
@@ -979,6 +980,11 @@ def build_context(values, cfg):
     status_hex      = f"0x{status_code_int:04X}" if status_code_int is not None else "0xFFFF"
     status_desc     = STATUS_DESCRIPTION.get(status_code_int, status_raw) if status_code_int is not None else status_raw
 
+    _bat_temp = f1s("battery_temperature")
+    _temps = [{"sensor": "INV", "value": f1s("inverter_temperature")}]
+    if float(_bat_temp) != 0.0:
+        _temps.append({"sensor": "BAT1", "value": _bat_temp})
+
     return {
         "brand":                  cfg["brand"],
         "serial":                 values.get("serial", ""),
@@ -996,6 +1002,7 @@ def build_context(values, cfg):
         "op_status_label": op_label,
         "inverter_temperature_c": f1s("inverter_temperature"),
         "battery_temperature_c":  f1s("battery_temperature"),
+        "temperatures": _temps,
         "grid_frequency_hz":      f"{n('grid_frequency'):.2f}",
         "pv_strings":             pv_strings,
         "active_pv_strings":      active_pv,
@@ -1171,6 +1178,64 @@ def dump_tou_registers(regmap):
                 val_str = f"{val:6d}  (0x{val:04X})" if val is not None else "   N/A"
                 print(f"    {reg}  {name} : {val_str}")
 
+def dump_registers(client, cfg, range_str: str):
+    """Read and print raw register values for an arbitrary range.
+
+    Solis convention:
+      33xxx  → input registers   (FC04, read-only monitoring data)
+      40xxx+ → holding registers (FC03, read/write settings)
+    The function code is chosen automatically per chunk based on address.
+    """
+    import re
+    m = re.match(r'^(\d+)\s*[-–—]\s*(\d+)$', range_str.strip())
+    if not m:
+        raise SystemExit(f"Invalid range '{range_str}'. Expected format: START-END (e.g. 33400-33600)")
+    start, end = int(m.group(1)), int(m.group(2))
+    if start > end:
+        start, end = end, start
+    offset   = 1 if cfg.get("use_zero_based_addressing", "false").lower() == "true" else 0
+    slave_id = int(cfg.get("slave_id", 1))
+    total    = end - start + 1
+
+    def _fc(addr):
+        return "input" if addr < 40000 else "holding"
+
+    def _read(addr, count):
+        a = addr - offset
+        if _fc(addr) == "input":
+            return client.read_input_registers(address=a, count=count, device_id=slave_id)
+        return client.read_holding_registers(address=a, count=count, device_id=slave_id)
+
+    print(f"=== Register dump {start}–{end} ({total} registers, slave {slave_id}, FC {'04/input' if start < 40000 else '03/holding'}) ===")
+    for chunk_start in range(start, end + 1, 100):
+        chunk_end = min(chunk_start + 100, end + 1)
+        count     = chunk_end - chunk_start
+        try:
+            rr = _read(chunk_start, count)
+            if not rr.isError():
+                for i, v in enumerate(rr.registers):
+                    s16 = v if v < 32768 else v - 65536
+                    marker = ">>" if v != 0 else "  "
+                    print(f"{marker} {chunk_start + i}  {v:6d}  0x{v:04X}  (s16: {s16:6d})")
+                continue
+        except Exception:
+            pass
+        # chunk failed — fall back to individual reads
+        print(f"  [chunk {chunk_start}-{chunk_end - 1} failed, reading one-by-one]", file=sys.stderr)
+        for reg in range(chunk_start, chunk_end):
+            try:
+                rr = _read(reg, 1)
+                if not rr.isError() and rr.registers:
+                    v   = rr.registers[0]
+                    s16 = v if v < 32768 else v - 65536
+                    marker = ">>" if v != 0 else "  "
+                    print(f"{marker} {reg}  {v:6d}  0x{v:04X}  (s16: {s16:6d})")
+                else:
+                    print(f"   {reg}   ERROR")
+            except Exception as exc:
+                print(f"   {reg}   EXCEPTION: {exc}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Solis Modbus poller")
     parser.add_argument("--format", choices=["human", "prometheus", "json"], default="human")
@@ -1180,7 +1245,26 @@ def parse_args():
                         help="Print raw TOU register values and exit (for debugging)")
     parser.add_argument("--dump-storage", action="store_true",
                         help="Print raw storage setting register values and exit (for debugging)")
+    parser.add_argument("--dump-registers", metavar="START-END",
+                        help="Dump raw holding registers for a range (e.g. 33400-33600); "
+                             "ranges >100 are read in 100-register chunks")
+    parser.add_argument("--ip", metavar="IP",
+                        help="Override inverter_ip from config (useful for discovery)")
+    parser.add_argument("--port", type=int, metavar="PORT",
+                        help="Override inverter_port from config")
+    parser.add_argument("--show-serial", action="store_true",
+                        help="Read and print the inverter serial number then exit")
     return parser.parse_args()
+
+def _read_serial_only(client, slave_id: int, use_zero_based: bool) -> str | None:
+    """Read registers 33004-33019 (input registers) and decode as ASCII serial."""
+    addr = 33004 - 1 if use_zero_based else 33004
+    rr = client.read_input_registers(address=addr, count=16, device_id=slave_id)
+    if rr.isError():
+        return None
+    raw = b"".join(struct.pack(">H", v) for v in rr.registers)
+    return raw.decode("ascii", errors="ignore").rstrip("\x00").strip() or None
+
 
 def _connect(ip, port, timeout=5, retries=3):
     """Create and connect a ModbusTcpClient, retrying once on failure."""
@@ -1197,10 +1281,36 @@ def _connect(ip, port, timeout=5, retries=3):
 
 def main():
     args = parse_args()
-    cfg  = load_config()
+
+    cfg_path = Path(__file__).resolve().parent / CONFIG_FILE
+    if args.ip and not cfg_path.exists():
+        cfg = {
+            "ip": args.ip,
+            "port": args.port or 502,
+            "slave_id": 1,
+            "use_zero_based": False,
+            "brand": "solis",
+            "config_path": "",
+            "expected_serial": "",
+            "inverter_power_w": 30000.0,
+            "mppt_count": 4,
+            "ranges": {},
+            "zeros_ok": set(),
+        }
+    else:
+        cfg = load_config()
+
+    if args.ip:
+        cfg["ip"] = args.ip
+    if args.port:
+        cfg["port"] = args.port
 
     client = _connect(cfg["ip"], cfg["port"])
     try:
+        if args.show_serial:
+            serial = _read_serial_only(client, cfg["slave_id"], cfg["use_zero_based"])
+            print(serial or "unknown")
+            return
         if args.dump_tou:
             dump_tou_registers(read_tou_registers(client, cfg))
             return
@@ -1232,6 +1342,9 @@ def main():
                         except Exception:
                             pass
             dump_storage_registers(regmap)
+            return
+        if args.dump_registers:
+            dump_registers(client, cfg, args.dump_registers)
             return
 
         values, skipped = None, []
