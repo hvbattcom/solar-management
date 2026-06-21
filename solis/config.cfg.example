@@ -18,7 +18,7 @@ serial = <logger_serial>
 inverter_power_kw = 30
 
 # Number of physical MPPT inputs (1-4) – limits PV string reporting; unused strings are suppressed
-mppt_count = 4
+mppt_count = 3
 
 # default_sanity_ranges.cfg is loaded first; any key set here overrides it
 # Example: uncomment to accept all-zero grid readings when grid is physically off

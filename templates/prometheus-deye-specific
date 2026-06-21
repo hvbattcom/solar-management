@@ -1,0 +1,12 @@
+# Deye-specific Prometheus metrics
+# Appended to prometheus output; covers sensors not present on generic inverters.
+
+# ── TOU / settings flags ──────────────────────────────────────────────────────
+
+# HELP grid_charge_enable Grid charging enabled (1=yes, 0=no)
+# TYPE grid_charge_enable gauge
+grid_charge_enable{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_charge_enable_num }}
+
+# HELP solar_sell_enable Solar sell to grid enabled (1=yes, 0=no)
+# TYPE solar_sell_enable gauge
+solar_sell_enable{brand="{{ brand }}",serial="{{ serial }}"} {{ solar_sell_enable_num }}

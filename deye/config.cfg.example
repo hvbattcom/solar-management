@@ -11,8 +11,5 @@ inverter_sn = 1234567890
 # Inverter rated output power in kilowatts (used for load % calculations)
 inverter_power_kw = 30.0
 
-# Number of MPPT inputs (used for PV string reporting)
-mppt_count = 3
-
 # Enable verbose logging for debugging (true/false)
 verbose = false

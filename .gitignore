@@ -1,5 +1,3 @@
 *.claude*
-solis-management/__pycache__/
-solis-management/maps/
-solis-management/dispatch.log
-solis-management/dispatch_state.json
+solis/config.cfg
+deye/config.cfg
