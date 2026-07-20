@@ -185,24 +185,45 @@ def verify_pending(pending: dict, fw: dict) -> bool:
     return not miss
 
 def get_slot_order(tou_slots: list, state: dict) -> list[int]:
-    """Return persistent random slot order for today's plan (regenerate on plan change)."""
-    ph = _plan_hash(tou_slots)
-    if (state.get("date") == date.today().isoformat()
-            and state.get("plan_hash") == ph
-            and state.get("slot_order")):
+    """Return persistent random slot order for today (one shuffle per day).
+
+    The order deliberately survives intraday plan changes: re-shuffling on
+    every plan reshape turned cosmetic changes into a full 6-register rewrite.
+    Wear-leveling only needs the day-to-day variation."""
+    if state.get("date") == date.today().isoformat() and state.get("slot_order"):
         return state["slot_order"]
     order = list(range(1, 7))
     random.shuffle(order)
-    log.info("slot order: %s  (plan hash %s)", order, ph)
+    log.info("slot order: %s  (plan hash %s)", order, _plan_hash(tou_slots))
     return order
 
-def build_desired_slots(tou_slots: list, slot_order: list[int]) -> list[dict]:
-    """Assign plan windows to randomised inverter slot numbers; pad unused to 6."""
+def build_desired_slots(tou_slots: list, slot_order: list[int],
+                        now_min: int | None = None) -> list[dict]:
+    """Assign plan windows to randomised inverter slot numbers; pad unused to 6.
+
+    More than 6 windows cannot fit the hardware.  Windows already fully in
+    the past are dropped first (their registers have done their job); only if
+    the FUTURE alone still overflows are the latest windows deferred — they
+    slide in on a later run once an earlier window ends.  The planner is
+    supposed to never let this happen, hence the warning."""
+    sorted_tou = sorted(tou_slots, key=lambda s: _tm(s["start"]))
+    if len(sorted_tou) > len(slot_order) and now_min is not None:
+        ended = [w for w in sorted_tou if _tm(w["end"]) <= now_min]
+        for w in ended:
+            if len(sorted_tou) <= len(slot_order):
+                break
+            sorted_tou.remove(w)
+    if len(sorted_tou) > len(slot_order):
+        dropped = sorted_tou[len(slot_order):]
+        log.warning("plan has %d TOU windows for %d registers — deferring: %s",
+                    len(tou_slots), len(slot_order),
+                    [(w["start"], w["end"]) for w in dropped])
+        sorted_tou = sorted_tou[:len(slot_order)]
+
     mapping: dict[int, dict] = {}
     # Use the chosen slot numbers in ascending order so the inverter sees
     # windows in chronological order (wear-leveling still picks random slots).
-    active_slots = sorted(slot_order[:len(tou_slots)])
-    sorted_tou   = sorted(tou_slots, key=lambda s: s["start"])
+    active_slots = sorted(slot_order[:len(sorted_tou)])
     for slot_num, sl in zip(active_slots, sorted_tou):
         mapping[slot_num] = {
             "slot":      slot_num,
@@ -212,7 +233,7 @@ def build_desired_slots(tou_slots: list, slot_order: list[int]) -> list[dict]:
             "soc_pct":   sl["soc_floor_pct"],
             "current_a": sl["amps"],
         }
-    for slot_num in slot_order[len(tou_slots):]:
+    for slot_num in slot_order[len(sorted_tou):]:
         mapping[slot_num] = {"slot": slot_num, "enabled": False,
                               "start": "00:00", "end": "00:00"}
     return [mapping[n] for n in sorted(mapping)]
@@ -340,7 +361,7 @@ def show_map(m: dict, now_min: int) -> None:
     print(f"\n{_BOLD}TOU Discharge Slots:{_RST}")
     if tou:
         for i, sl in enumerate(tou):
-            print(f"  {_CYN}{_CIRCLE[i]}{_RST}  {sl['start']} – {sl['end']}"
+            print(f"  {_CYN}{_CIRCLE[i % len(_CIRCLE)]}{_RST}  {sl['start']} – {sl['end']}"
                   f"   {_YLW}{sl['amps']} A{_RST}  floor {sl['soc_floor_pct']}%")
     else:
         print(f"  {_DIM}(none){_RST}")
@@ -461,7 +482,7 @@ def main() -> None:
 
     # ── TOU slot sync ─────────────────────────────────────────────────────────
     slot_order = get_slot_order(tou_slots, state)
-    desired    = build_desired_slots(tou_slots, slot_order)
+    desired    = build_desired_slots(tou_slots, slot_order, now_min)
     tou_hit    = sync_tou(desired, tou_slots, fw_discharge, cfg["api_url"], args.dry_run)
 
     # ── Export ────────────────────────────────────────────────────────────────
