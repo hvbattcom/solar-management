@@ -22,7 +22,7 @@ import random
 import sys
 import urllib.parse
 import urllib.request
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -61,7 +61,11 @@ def _fmt(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 def _tou_t(t: str) -> str:
-    return "00:00" if t == "24:00" else t
+    """Wrap any hour >=24 (the plan horizon runs up to 1h into the next day,
+    e.g. '24:15', '25:00') to real wall-clock HH:MM for the firmware, which
+    has no notion of a day boundary."""
+    h, m = t.split(":")
+    return f"{int(h) % 24:02d}:{m}"
 
 def _per_bat(amps: float) -> float:
     return max(1.0, round(amps / 2, 1))
@@ -392,6 +396,18 @@ def main() -> None:
 
     _now    = datetime.now()
     now_min = _tm(args.time) if args.time else _now.hour * 60 + _now.minute
+
+    # The plan's horizon can run up to 1h past its own midnight (map date=D
+    # covers D 00:00 through D+1 01:00, e.g. events/tou_slots at "24:15").
+    # If we're still serving yesterday's map (today's hasn't been generated/
+    # pushed yet — the gap before the post-midnight cron fires), shift
+    # now_min onto that map's timeline so those post-midnight entries become
+    # reachable.  Only exactly-yesterday qualifies; a map older than that is
+    # already a stale-data situation the existing fallback warns about.
+    if not args.time and m.get("date") == (date.today() - timedelta(days=1)).isoformat():
+        now_min += 1440
+        log.info("serving previous day's map (%s) — now shifted to %s",
+                 m["date"], _fmt(now_min))
 
     if args.show:
         show_map(m, now_min); return
