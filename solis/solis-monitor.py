@@ -487,6 +487,7 @@ def load_config(cfg_path: Path = None):
         "expected_serial": sec.get("serial", "").strip(),
         "inverter_power_w": fget("inverter_power_kw", 30.0) * 1000.0,
         "mppt_count":       sec.getint("mppt_count", fallback=4),
+        "legacy_metrics":   sec.getboolean("legacy_metrics", fallback=False),
         "ranges":         ranges,
         "zeros_ok":       zeros_ok,
         "_raw_sec":       sec,
@@ -1059,6 +1060,7 @@ def build_context(values, cfg):
         "backup_load_year_kwh":      f"{n('backup_load_energy_year'):.1f}",
         "backup_load_total_kwh":     f"{n('backup_load_energy_total'):.1f}",
         "battery2": None,  # Solis second-battery registers not identified yet
+        "legacy_metrics": bool(cfg.get("legacy_metrics", False)),  # LEGACY SHIM toggle
     }
 
 # ── Serial-mismatch error contexts ────────────────────────────────────────────
@@ -1129,6 +1131,18 @@ def render_to_str(fmt: str, ctx: dict, solis_specific: bool = True) -> str:
             output   = output.rstrip("\n") + "\n" + specific
         except Exception:
             pass
+    # ── LEGACY COMPATIBILITY SHIM — TEMPORARY, REMOVE AFTER MIGRATION ─────────
+    # Appends legacy-named aliases for the handful of metrics the new exporter
+    # renamed/dropped, so old dashboards keep working from a single poll.
+    # Enabled by `legacy_metrics = true` in config.cfg [SolisInverter] (default off).
+    # To remove: delete this block and templates/prometheus-legacy-solis-specific.
+    if solis_specific and fmt == "prometheus" and ctx.get("legacy_metrics"):
+        try:
+            legacy = env.get_template(f"{fmt}-legacy-solis-specific").render(**ctx)
+            output = output.rstrip("\n") + "\n" + legacy
+        except Exception:
+            pass
+    # ── END LEGACY COMPATIBILITY SHIM ────────────────────────────────────────
     return output
 
 def render(fmt, ctx, solis_specific=True):
