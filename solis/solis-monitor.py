@@ -1129,6 +1129,17 @@ def render_to_str(fmt: str, ctx: dict, solis_specific: bool = True) -> str:
             output   = output.rstrip("\n") + "\n" + specific
         except Exception:
             pass
+    # ── LEGACY COMPATIBILITY SHIM — TEMPORARY, REMOVE AFTER MIGRATION ─────────
+    # Appends legacy-named aliases for the handful of metrics the new exporter
+    # renamed/dropped, so old dashboards keep working from a single poll.
+    # To remove: delete this block and templates/prometheus-legacy-solis-specific.
+    if solis_specific and fmt == "prometheus":
+        try:
+            legacy = env.get_template(f"{fmt}-legacy-solis-specific").render(**ctx)
+            output = output.rstrip("\n") + "\n" + legacy
+        except Exception:
+            pass
+    # ── END LEGACY COMPATIBILITY SHIM ────────────────────────────────────────
     return output
 
 def render(fmt, ctx, solis_specific=True):

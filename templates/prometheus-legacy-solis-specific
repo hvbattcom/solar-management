@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LEGACY COMPATIBILITY SHIM — TEMPORARY, REMOVE AFTER MIGRATION
+# Emits only the metric names the new exporter renamed or dropped, so old
+# dashboards/queries keep working while both are scraped from ONE poll.
+# The other ~54 legacy metrics are already emitted verbatim by the new
+# templates (identical name + labels), so they are intentionally NOT repeated
+# here (repeating them would create duplicate series and fail the scrape).
+# To remove: delete this file and the guarded block in render_to_str().
+# ─────────────────────────────────────────────────────────────────────────────
+
+# HELP grid_power_w [legacy alias of grid_total_active_power_w] Grid total active power watts (positive=import, negative=export)
+# TYPE grid_power_w gauge
+grid_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_power_w }}
+
+# HELP inverter_active_power_w [legacy alias of inverter_total_active_power_w] Inverter active power watts
+# TYPE inverter_active_power_w gauge
+inverter_active_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_active_power_w }}
+
+# HELP backup_load_power_w [legacy alias of backup_total_active_power_w] Backup load power watts
+# TYPE backup_load_power_w gauge
+backup_load_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_power_w }}
+
+# HELP grid_power_pct [legacy alias of grid_total_power_pct] Grid power as percent of rated capacity
+# TYPE grid_power_pct gauge
+grid_power_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_power_pct }}
+
+# HELP backup_power_pct [legacy alias of backup_total_power_pct] Backup power as percent of rated capacity
+# TYPE backup_power_pct gauge
+backup_power_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_power_pct }}
+
+# HELP battery_temperature_c [legacy; new exporter folds this into inverter_temperature_c{sensor="BAT1"}] Battery temperature celsius
+# TYPE battery_temperature_c gauge
+battery_temperature_c{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_temperature_c }}
+
+# HELP battery_charge_current_limit_bms_a [legacy alias of battery_charge_limit_a] BMS charge current limit amps
+# TYPE battery_charge_current_limit_bms_a gauge
+battery_charge_current_limit_bms_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_charge_current_limit_bms_a }}
+
+# HELP battery_discharge_current_limit_bms_a [legacy alias of battery_discharge_limit_a] BMS discharge current limit amps
+# TYPE battery_discharge_current_limit_bms_a gauge
+battery_discharge_current_limit_bms_a{brand="{{ brand }}",serial="{{ serial }}"} {{ battery_discharge_current_limit_bms_a }}
