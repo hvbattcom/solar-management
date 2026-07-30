@@ -24,6 +24,11 @@ mppt_count = 3
 # Example: uncomment to accept all-zero grid readings when grid is physically off
 # zeros_ok_grid = true
 
+# TEMPORARY legacy-compat: when true, the /metrics (prometheus) output also emits
+# the 8 legacy-named metric aliases the new exporter renamed/dropped, so old
+# dashboards keep working during migration. Default off. Remove after migration.
+# legacy_metrics = true
+
 [SolisAPI]
 # Bind address and port for solis-api.py (also used by dispatch.py to reach it)
 host = 0.0.0.0
