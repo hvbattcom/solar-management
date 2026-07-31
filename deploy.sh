@@ -17,7 +17,8 @@ Usage: sudo ./deploy.sh
 One-time deployment for solar-management. Steps performed:
   1. Install system packages  (nmap curl python3 python3-pip)
   2. Install Python packages  (from requirements.txt)
-  3. Discover devices on LAN and generate config.cfg
+  3. Load discovered devices from found.yaml (scanning first if it doesn't
+     exist yet) and generate config.cfg
   4. Generate solar-management.service (project root)
   5. Install + enable service in /etc/systemd/system/
   6. daemon-reload
@@ -25,6 +26,11 @@ One-time deployment for solar-management. Steps performed:
   8. Health check: curl localhost:<port>/api/status
 
 Safe to re-run – all steps are idempotent.
+
+Tip: if discovery is flaky (inverter/battery not always found on the same
+scan), run ./discover.sh a few times beforehand until found.yaml shows
+everything you need, then run deploy.sh – it will reuse found.yaml instead
+of re-scanning.
 EOF
             exit 0
             ;;
@@ -44,6 +50,14 @@ ini_get() {
         /^\[/ { in_sec = ($0 == sec) }
         in_sec && $1 == k { print $2; exit }
     ' "$1"
+}
+
+# Read a single value from found.yaml: yaml_get <file> <key>
+yaml_get() {
+    local file="$1" key="$2"
+    [[ -f "$file" ]] || return 0
+    grep "^${key}: " "$file" 2>/dev/null | head -1 \
+        | sed -e "s/^${key}: //" -e 's/^"//' -e 's/"$//' || true
 }
 
 # ── Sudo guard ────────────────────────────────────────────────────────────────
@@ -94,17 +108,28 @@ fi
 # ── Step 3: Discover + generate config ────────────────────────────────────────
 
 step "3/8  Discover devices & generate config"
-DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config 2>&1) \
-    || { echo "$DISCOVER_OUT"; die "discover.sh failed"; }
+FOUND_FILE="$SCRIPT_DIR/found.yaml"
+
+if [[ -f "$FOUND_FILE" ]]; then
+    echo "  found.yaml already exists – reusing it instead of re-scanning"
+    echo "  (run ./discover.sh beforehand to refresh it, e.g. if IPs changed)"
+    DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config --from-file 2>&1) \
+        || { echo "$DISCOVER_OUT"; die "discover.sh failed"; }
+else
+    echo "  No found.yaml yet – running a live scan"
+    DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config 2>&1) \
+        || { echo "$DISCOVER_OUT"; die "discover.sh failed"; }
+fi
 echo "$DISCOVER_OUT"
 
-# Determine what was actually generated this run
+# Determine what was actually found, from the structured found.yaml – not by
+# grepping discover.sh's text output
 GENERATED_SOLIS=0; GENERATED_DEYE=0
-grep -q "Generated solis/config.cfg" <<< "$DISCOVER_OUT" && GENERATED_SOLIS=1
-grep -q "Generated deye/config.cfg"  <<< "$DISCOVER_OUT" && GENERATED_DEYE=1
+[[ "$(yaml_get "$FOUND_FILE" solis_found)" == "true" ]] && GENERATED_SOLIS=1
+[[ "$(yaml_get "$FOUND_FILE" deye_found)"  == "true" ]] && GENERATED_DEYE=1
 
 (( GENERATED_SOLIS || GENERATED_DEYE )) \
-    || die "No inverter found – cannot deploy"
+    || die "No inverter found – run ./discover.sh (maybe more than once; it merges results into found.yaml) until it finds your Solis or Deye inverter, then re-run deploy.sh"
 ok "Config generated"
 
 # ── Step 4: Generate service file ─────────────────────────────────────────────
