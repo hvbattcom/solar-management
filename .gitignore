@@ -1,3 +1,4 @@
 *.claude*
 solis/config.cfg
 deye/config.cfg
+found.yaml

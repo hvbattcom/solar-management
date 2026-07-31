@@ -7,6 +7,11 @@
 #   ./discover.sh 192.168.22.0/24 5          # explicit subnet + timeout (seconds)
 #   ./discover.sh --generate-config          # scan + write solis/config.cfg and deye/config.cfg
 #   ./discover.sh 192.168.22.0/24 --generate-config
+#   ./discover.sh --generate-config --from-file  # skip the scan, use found.yaml
+#
+# Every run merges its results into found.yaml, so re-running after a scan
+# that only found one device fills in the other without losing what's already
+# known. deploy.sh reads found.yaml instead of re-scanning.
 
 set -euo pipefail
 
@@ -19,10 +24,20 @@ for arg in "$@"; do
 Usage: discover.sh [SUBNET] [TIMEOUT] [OPTIONS]
 
   SUBNET            CIDR to scan (default: auto-detect from default route)
-  TIMEOUT           Probe timeout in seconds (default: 3)
+  TIMEOUT           Probe timeout in seconds (default: 8 – must be at least
+                    the monitors' own ~5s connect timeout, or probes get
+                    killed before the device can respond)
   --generate-config After scanning, write solis/config.cfg and deye/config.cfg
                     from the .example files, filling in the discovered IP and SN
+  --from-file       Skip the network scan; reuse whatever is already recorded
+                    in found.yaml (combine with --generate-config to (re)write
+                    config.cfg files without re-scanning)
   -h, --help        Show this help
+
+Every run (scan or --from-file) merges results into found.yaml: a device found
+today is kept on record even if a later scan misses it, so a flaky scan that
+only spots the inverter (or only the battery) doesn't lose the other one.
+deploy.sh reads found.yaml to decide what to deploy.
 
 Examples:
   ./discover.sh
@@ -30,6 +45,7 @@ Examples:
   ./discover.sh 192.168.22.0/24 5
   ./discover.sh --generate-config
   ./discover.sh 192.168.22.0/24 --generate-config
+  ./discover.sh --generate-config --from-file
 
 Detected devices:
   port 8899  →  Deye datalogger   (SolarmanV5, logger SN auto-discovered)
@@ -88,25 +104,54 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOLIS_MONITOR="$SCRIPT_DIR/solis/solis-monitor.py"
 DEYE_MONITOR="$SCRIPT_DIR/deye/deye-monitor.py"
+FOUND_FILE="$SCRIPT_DIR/found.yaml"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 GENERATE_CONFIG=0
+FROM_FILE=0
 POSITIONAL=()
 for arg in "$@"; do
     case "$arg" in
         --generate-config) GENERATE_CONFIG=1 ;;
+        --from-file) FROM_FILE=1 ;;
         -h|--help) ;; # already handled above
         *) POSITIONAL+=("$arg") ;;
     esac
 done
 
 SUBNET="${POSITIONAL[0]:-}"
-TIMEOUT="${POSITIONAL[1]:-3}"
+TIMEOUT="${POSITIONAL[1]:-8}"
+
+# ── found.yaml helpers ─────────────────────────────────────────────────────────
+
+# yaml_get <file> <key> – read a "key: value" (optionally quoted) line
+yaml_get() {
+    local file="$1" key="$2"
+    [[ -f "$file" ]] || return 0
+    grep "^${key}: " "$file" 2>/dev/null | head -1 \
+        | sed -e "s/^${key}: //" -e 's/^"//' -e 's/"$//' || true
+}
+
+# Previously recorded devices, if any – carried forward unless this run overrides them
+PREV_SOLIS_IP=$(yaml_get "$FOUND_FILE" solis_ip)
+PREV_SOLIS_SERIAL=$(yaml_get "$FOUND_FILE" solis_serial)
+PREV_SOLIS_LAST_SEEN=$(yaml_get "$FOUND_FILE" solis_last_seen)
+PREV_DEYE_IP=$(yaml_get "$FOUND_FILE" deye_ip)
+PREV_DEYE_SN=$(yaml_get "$FOUND_FILE" deye_sn)
+PREV_DEYE_LAST_SEEN=$(yaml_get "$FOUND_FILE" deye_last_seen)
+PREV_BATTERY_IP=$(yaml_get "$FOUND_FILE" battery_ip)
+PREV_BATTERY_MAC=$(yaml_get "$FOUND_FILE" battery_mac)
+PREV_BATTERY_LAST_SEEN=$(yaml_get "$FOUND_FILE" battery_last_seen)
+
+if (( FROM_FILE )) && [[ ! -f "$FOUND_FILE" ]]; then
+    echo "ERROR: --from-file given but $FOUND_FILE does not exist yet — run ./discover.sh at least once first" >&2
+    exit 1
+fi
 
 # ── Subnet auto-detect ────────────────────────────────────────────────────────
 
-if [[ -z "$SUBNET" ]]; then
+if (( ! FROM_FILE )) && [[ -z "$SUBNET" ]]; then
     # Follow the default-route interface so VPNs / secondary interfaces are ignored
     DEFAULT_IFACE=$(ip route show default 2>/dev/null \
         | awk 'NR==1 {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
@@ -127,13 +172,28 @@ get_mac() {
 }
 
 # ── Probes ────────────────────────────────────────────────────────────────────
+# solis-monitor.py / deye-monitor.py connect with a 5s internal timeout (plus a
+# retry on connection failure), so wrapping them in a shorter outer `timeout`
+# can kill a probe before the device gets a fair chance to respond. Use the
+# script's own $TIMEOUT (not a hardcoded value shorter than that) and retry
+# once more here in case of a transient miss.
 
 probe_deye() {
-    timeout 3 python3 "$DEYE_MONITOR" --ip "$1" --show-serial 2>/dev/null || echo "unknown"
+    local ip="$1" result
+    for _ in 1 2; do
+        result=$(timeout "$TIMEOUT" python3 "$DEYE_MONITOR" --ip "$ip" --show-serial 2>/dev/null)
+        [[ -n "$result" && "$result" != "unknown" ]] && { echo "$result"; return; }
+    done
+    echo "unknown"
 }
 
 probe_solis() {
-    timeout 3 python3 "$SOLIS_MONITOR" --ip "$1" --port "$2" --show-serial 2>/dev/null || echo "unknown"
+    local ip="$1" port="$2" result
+    for _ in 1 2; do
+        result=$(timeout "$TIMEOUT" python3 "$SOLIS_MONITOR" --ip "$ip" --port "$port" --show-serial 2>/dev/null)
+        [[ -n "$result" && "$result" != "unknown" ]] && { echo "$result"; return; }
+    done
+    echo "unknown"
 }
 
 probe_battery_emulator() {
@@ -162,78 +222,151 @@ probe_battery_emulator() {
 
 # ── Scan + probe ──────────────────────────────────────────────────────────────
 
-echo "Scanning $SUBNET …" >&2
-
 found=0
-# First device of each type with a valid SN – used by --generate-config
+# First device of each type seen *this run* – "" means not seen this run
 SOLIS_IP="" SOLIS_SERIAL=""
 DEYE_IP=""  DEYE_SN=""
+BATTERY_IP="" BATTERY_MAC=""
 
-while IFS= read -r line; do
-    # nmap -oG emits two lines per host; we only want the one with port info
-    [[ "$line" != Host:* ]]  && continue
-    [[ "$line" != *Ports:* ]] && continue
+if (( ! FROM_FILE )); then
+    echo "Scanning $SUBNET …" >&2
 
-    IP=$(  awk '{print $2}'            <<< "$line")
-    PORTS=$(grep -oE '[0-9]+/open'    <<< "$line" | grep -oE '^[0-9]+' | tr '\n' ' ')
-    MAC=$(get_mac "$IP")
+    while IFS= read -r line; do
+        # nmap -oG emits two lines per host; we only want the one with port info
+        [[ "$line" != Host:* ]]  && continue
+        [[ "$line" != *Ports:* ]] && continue
 
-    if grep -qw 8899 <<< "$PORTS"; then
-        SN=$(probe_deye "$IP")
-        echo "┌─ Deye Inverter ──────────────────────────────────"
-        printf "│  IP         : %s\n" "$IP"
-        printf "│  MAC        : %s\n" "$MAC"
-        printf "│  Logger SN  : %s\n" "$SN"
-        echo "└──────────────────────────────────────────────────"
-        found=1
-        [[ -z "$DEYE_IP" && "$SN" != "unknown" ]] && { DEYE_IP="$IP"; DEYE_SN="$SN"; }
+        IP=$(  awk '{print $2}'            <<< "$line")
+        PORTS=$(grep -oE '[0-9]+/open'    <<< "$line" | grep -oE '^[0-9]+' | tr '\n' ' ')
+        MAC=$(get_mac "$IP")
+
+        if grep -qw 8899 <<< "$PORTS"; then
+            SN=$(probe_deye "$IP")
+            if [[ "$SN" != "unknown" ]]; then
+                echo "┌─ Deye Inverter ──────────────────────────────────"
+                printf "│  IP         : %s\n" "$IP"
+                printf "│  MAC        : %s\n" "$MAC"
+                printf "│  Logger SN  : %s\n" "$SN"
+                echo "└──────────────────────────────────────────────────"
+                found=1
+                [[ -z "$DEYE_IP" ]] && { DEYE_IP="$IP"; DEYE_SN="$SN"; }
+            else
+                echo "  (port 8899 open on $IP but no valid Solarman logger responded – skipped)" >&2
+            fi
+        fi
+
+        if grep -qw 502 <<< "$PORTS"; then
+            SERIAL=$(probe_solis "$IP" 502)
+            if [[ "$SERIAL" != "unknown" ]]; then
+                echo "┌─ Solis Inverter ─────────────────────────────────"
+                printf "│  IP         : %s\n" "$IP"
+                printf "│  MAC        : %s\n" "$MAC"
+                printf "│  Serial     : %s\n" "$SERIAL"
+                echo "└──────────────────────────────────────────────────"
+                found=1
+                [[ -z "$SOLIS_IP" ]] && { SOLIS_IP="$IP"; SOLIS_SERIAL="$SERIAL"; }
+            else
+                echo "  (port 502 open on $IP but no valid Solis serial responded – skipped, possibly a non-Solis Modbus device)" >&2
+            fi
+        fi
+
+        if grep -qw 80 <<< "$PORTS"; then
+            if probe_battery_emulator "$IP" "$MAC"; then
+                found=1
+                [[ -z "$BATTERY_IP" ]] && { BATTERY_IP="$IP"; BATTERY_MAC="$MAC"; }
+            fi
+        fi
+
+    done < <(nmap -p 80,502,8899 --open -T4 -oG - "$SUBNET" 2>/dev/null)
+
+    (( found )) || echo "No inverters or Battery Emulators found this run."
+fi
+
+# ── Merge with found.yaml ──────────────────────────────────────────────────────
+# A device missed by this run still counts if an earlier run recorded it, so a
+# flaky scan that only spots one device doesn't wipe out the other one.
+
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+if (( FROM_FILE )); then
+    FINAL_SOLIS_IP="$PREV_SOLIS_IP"; FINAL_SOLIS_SERIAL="$PREV_SOLIS_SERIAL"; FINAL_SOLIS_SEEN="$PREV_SOLIS_LAST_SEEN"
+    FINAL_DEYE_IP="$PREV_DEYE_IP";   FINAL_DEYE_SN="$PREV_DEYE_SN";           FINAL_DEYE_SEEN="$PREV_DEYE_LAST_SEEN"
+    FINAL_BATTERY_IP="$PREV_BATTERY_IP"; FINAL_BATTERY_MAC="$PREV_BATTERY_MAC"; FINAL_BATTERY_SEEN="$PREV_BATTERY_LAST_SEEN"
+else
+    if [[ -n "$SOLIS_IP" ]]; then
+        FINAL_SOLIS_IP="$SOLIS_IP"; FINAL_SOLIS_SERIAL="$SOLIS_SERIAL"; FINAL_SOLIS_SEEN="$NOW"
+    else
+        FINAL_SOLIS_IP="$PREV_SOLIS_IP"; FINAL_SOLIS_SERIAL="$PREV_SOLIS_SERIAL"; FINAL_SOLIS_SEEN="$PREV_SOLIS_LAST_SEEN"
     fi
 
-    if grep -qw 502 <<< "$PORTS"; then
-        SERIAL=$(probe_solis "$IP" 502)
-        echo "┌─ Solis Inverter ─────────────────────────────────"
-        printf "│  IP         : %s\n" "$IP"
-        printf "│  MAC        : %s\n" "$MAC"
-        printf "│  Serial     : %s\n" "$SERIAL"
-        echo "└──────────────────────────────────────────────────"
-        found=1
-        [[ -z "$SOLIS_IP" && "$SERIAL" != "unknown" ]] && { SOLIS_IP="$IP"; SOLIS_SERIAL="$SERIAL"; }
+    if [[ -n "$DEYE_IP" ]]; then
+        FINAL_DEYE_IP="$DEYE_IP"; FINAL_DEYE_SN="$DEYE_SN"; FINAL_DEYE_SEEN="$NOW"
+    else
+        FINAL_DEYE_IP="$PREV_DEYE_IP"; FINAL_DEYE_SN="$PREV_DEYE_SN"; FINAL_DEYE_SEEN="$PREV_DEYE_LAST_SEEN"
     fi
 
-    if grep -qw 80 <<< "$PORTS"; then
-        probe_battery_emulator "$IP" "$MAC" && found=1 || true
+    if [[ -n "$BATTERY_IP" ]]; then
+        FINAL_BATTERY_IP="$BATTERY_IP"; FINAL_BATTERY_MAC="$BATTERY_MAC"; FINAL_BATTERY_SEEN="$NOW"
+    else
+        FINAL_BATTERY_IP="$PREV_BATTERY_IP"; FINAL_BATTERY_MAC="$PREV_BATTERY_MAC"; FINAL_BATTERY_SEEN="$PREV_BATTERY_LAST_SEEN"
     fi
 
-done < <(nmap -p 80,502,8899 --open -T4 -oG - "$SUBNET" 2>/dev/null)
+    {
+        echo "# Auto-generated by discover.sh — do not edit by hand"
+        echo "scan_time: \"$NOW\""
+        echo "subnet: \"$SUBNET\""
+        echo ""
+        echo "solis_found: $([[ -n "$FINAL_SOLIS_IP" ]] && echo true || echo false)"
+        echo "solis_ip: \"$FINAL_SOLIS_IP\""
+        echo "solis_serial: \"$FINAL_SOLIS_SERIAL\""
+        echo "solis_last_seen: \"$FINAL_SOLIS_SEEN\""
+        echo ""
+        echo "deye_found: $([[ -n "$FINAL_DEYE_IP" ]] && echo true || echo false)"
+        echo "deye_ip: \"$FINAL_DEYE_IP\""
+        echo "deye_sn: \"$FINAL_DEYE_SN\""
+        echo "deye_last_seen: \"$FINAL_DEYE_SEEN\""
+        echo ""
+        echo "battery_found: $([[ -n "$FINAL_BATTERY_IP" ]] && echo true || echo false)"
+        echo "battery_ip: \"$FINAL_BATTERY_IP\""
+        echo "battery_mac: \"$FINAL_BATTERY_MAC\""
+        echo "battery_last_seen: \"$FINAL_BATTERY_SEEN\""
+    } > "$FOUND_FILE"
 
-(( found )) || echo "No inverters or Battery Emulators found."
+    echo "" >&2
+    echo "Updated $FOUND_FILE:" >&2
+    printf "  Solis inverter    : %s\n" "$([[ -n "$FINAL_SOLIS_IP"   ]] && echo "✓ $FINAL_SOLIS_IP" || echo "✗ not yet found")" >&2
+    printf "  Deye inverter     : %s\n" "$([[ -n "$FINAL_DEYE_IP"    ]] && echo "✓ $FINAL_DEYE_IP"  || echo "✗ not yet found")" >&2
+    printf "  Battery Emulator  : %s\n" "$([[ -n "$FINAL_BATTERY_IP" ]] && echo "✓ $FINAL_BATTERY_IP" || echo "✗ not yet found")" >&2
+fi
 
 # ── Config generation ─────────────────────────────────────────────────────────
+# Uses the merged (found.yaml) results, so a device recorded on an earlier run
+# still gets its config written even if this particular scan didn't see it.
 
 if (( GENERATE_CONFIG )); then
     generated=0
 
-    if [[ -n "$SOLIS_IP" ]]; then
+    if [[ -n "$FINAL_SOLIS_IP" ]]; then
         src="$SCRIPT_DIR/solis/config.cfg.example"
         dst="$SCRIPT_DIR/solis/config.cfg"
         sed \
-            -e "s|^inverter_ip = .*|inverter_ip = $SOLIS_IP|" \
-            -e "s|^serial = .*|serial = $SOLIS_SERIAL|" \
+            -e "s|^inverter_ip = .*|inverter_ip = $FINAL_SOLIS_IP|" \
+            -e "s|^serial = .*|serial = $FINAL_SOLIS_SERIAL|" \
             "$src" > "$dst"
-        echo "Generated solis/config.cfg  (IP: $SOLIS_IP  serial: $SOLIS_SERIAL)"
+        echo "Generated solis/config.cfg  (IP: $FINAL_SOLIS_IP  serial: $FINAL_SOLIS_SERIAL)"
         generated=1
     else
         echo "WARNING: no Solis inverter with valid serial found – config not generated" >&2
     fi
 
-    if [[ -n "$DEYE_IP" ]]; then
+    if [[ -n "$FINAL_DEYE_IP" ]]; then
         src="$SCRIPT_DIR/deye/config.cfg.example"
         dst="$SCRIPT_DIR/deye/config.cfg"
         sed \
-            -e "s|^inverter_ip = .*|inverter_ip = $DEYE_IP|" \
-            -e "s|^inverter_sn = .*|inverter_sn = $DEYE_SN|" \
+            -e "s|^inverter_ip = .*|inverter_ip = $FINAL_DEYE_IP|" \
+            -e "s|^inverter_sn = .*|inverter_sn = $FINAL_DEYE_SN|" \
             "$src" > "$dst"
-        echo "Generated deye/config.cfg   (IP: $DEYE_IP  SN: $DEYE_SN)"
+        echo "Generated deye/config.cfg   (IP: $FINAL_DEYE_IP  SN: $FINAL_DEYE_SN)"
         generated=1
     else
         echo "WARNING: no Deye inverter with valid SN found – config not generated" >&2
