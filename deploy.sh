@@ -6,13 +6,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Help ──────────────────────────────────────────────────────────────────────
+# ── Help / flags ──────────────────────────────────────────────────────────────
 
+VERBOSE=0
 for arg in "$@"; do
     case "$arg" in
         -h|--help)
             cat <<'EOF'
-Usage: sudo ./deploy.sh
+Usage: sudo ./deploy.sh [-v|--verbose]
 
 One-time deployment for solar-management. Steps performed:
   1. Install system packages  (nmap curl python3 python3-pip)
@@ -27,6 +28,9 @@ One-time deployment for solar-management. Steps performed:
 
 Safe to re-run – all steps are idempotent.
 
+  -v, --verbose  Full shell tracing (set -x) plus unfiltered apt/pip
+                 output, for debugging a failed run.
+
 Tip: if discovery is flaky (inverter/battery not always found on the same
 scan), run ./discover.sh a few times beforehand until found.yaml shows
 everything you need, then run deploy.sh – it will reuse found.yaml instead
@@ -34,15 +38,21 @@ of re-scanning.
 EOF
             exit 0
             ;;
+        -v|--verbose)
+            VERBOSE=1
+            ;;
     esac
 done
 
+(( VERBOSE )) && set -x
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-ok()   { printf "  \033[32m✓\033[0m  %s\n" "$*"; }
-fail() { printf "  \033[31m✗\033[0m  %s\n" "$*" >&2; }
-step() { printf "\n\033[1;36m══ %s\033[0m\n" "$*"; }
-die()  { fail "$*"; exit 1; }
+ok()    { printf "  \033[32m✓\033[0m  %s\n" "$*"; }
+fail()  { printf "  \033[31m✗\033[0m  %s\n" "$*" >&2; }
+step()  { printf "\n\033[1;36m══ %s\033[0m\n" "$*"; }
+die()   { fail "$*"; exit 1; }
+debug() { (( VERBOSE )) && printf "  \033[2m[debug] %s\033[0m\n" "$*" || true; }
 
 # Read a single value from an INI file: ini_get <file> <section> <key>
 ini_get() {
@@ -64,6 +74,7 @@ yaml_get() {
 
 [[ $EUID -eq 0 ]] || die "Must run as root:  sudo $0"
 SERVICE_USER="${SUDO_USER:-$USER}"
+debug "service user: $SERVICE_USER"
 
 # ── Step 1: System packages ───────────────────────────────────────────────────
 
@@ -76,9 +87,13 @@ done
 
 if (( ${#MISSING_APT[@]} )); then
     echo "  Installing: ${MISSING_APT[*]}"
-    apt-get install -y "${MISSING_APT[@]}" 2>&1 \
-        | grep -E '^(Get:|Unpacking|Setting up|Processing)' \
-        | sed 's/^/    /' || true
+    if (( VERBOSE )); then
+        apt-get install -y "${MISSING_APT[@]}"
+    else
+        apt-get install -y "${MISSING_APT[@]}" 2>&1 \
+            | grep -E '^(Get:|Unpacking|Setting up|Processing)' \
+            | sed 's/^/    /' || true
+    fi
     ok "Installed: ${MISSING_APT[*]}"
 else
     ok "All apt packages already present"
@@ -99,7 +114,11 @@ done < "$REQUIREMENTS"
 
 if (( ${#MISSING_PY[@]} )); then
     echo "  Installing: ${MISSING_PY[*]}"
-    pip install -q "${MISSING_PY[@]}" --break-system-packages || die "pip install failed"
+    if (( VERBOSE )); then
+        pip install "${MISSING_PY[@]}" --break-system-packages || die "pip install failed"
+    else
+        pip install -q "${MISSING_PY[@]}" --break-system-packages || die "pip install failed"
+    fi
     ok "Installed: ${MISSING_PY[*]}"
 else
     ok "All Python packages already present"
@@ -127,6 +146,7 @@ echo "$DISCOVER_OUT"
 GENERATED_SOLIS=0; GENERATED_DEYE=0
 [[ "$(yaml_get "$FOUND_FILE" solis_found)" == "true" ]] && GENERATED_SOLIS=1
 [[ "$(yaml_get "$FOUND_FILE" deye_found)"  == "true" ]] && GENERATED_DEYE=1
+debug "solis_found=$GENERATED_SOLIS deye_found=$GENERATED_DEYE"
 
 (( GENERATED_SOLIS || GENERATED_DEYE )) \
     || die "No inverter found – run ./discover.sh (maybe more than once; it merges results into found.yaml) until it finds your Solis or Deye inverter, then re-run deploy.sh"
@@ -152,6 +172,7 @@ else
     API_PORT=${API_PORT:-5000}
     INVERTER_TYPE="Deye"
 fi
+debug "inverter=$INVERTER_TYPE workdir=$API_WORKDIR port=$API_PORT"
 
 SERVICE_FILE="$SCRIPT_DIR/solar-management.service"
 
@@ -199,12 +220,24 @@ ok "solar-management started"
 # ── Step 8: Health check ──────────────────────────────────────────────────────
 
 step "8/8  Health check"
-sleep 2
-if curl -sf "http://localhost:${API_PORT}/api/status" >/dev/null; then
+# First startup can take longer than a fixed sleep accounts for -- poll
+# instead of guessing.
+HEALTHY=0
+for i in $(seq 1 20); do
+    if curl -sf "http://localhost:${API_PORT}/api/status" >/dev/null 2>&1; then
+        HEALTHY=1
+        break
+    fi
+    debug "waiting for API (attempt $i/20)"
+    sleep 1
+done
+
+if (( HEALTHY )); then
     ok "API responding on :${API_PORT}  →  http://localhost:${API_PORT}/api/status"
 else
-    fail "API did not respond on :${API_PORT}"
+    fail "API did not respond on :${API_PORT} within 20s"
     echo "  Check logs:  journalctl -u solar-management -n 30" >&2
+    echo "  Or re-run with -v/--verbose for full output" >&2
     exit 1
 fi
 
