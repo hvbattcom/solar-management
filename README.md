@@ -138,6 +138,16 @@ discovery was flaky, run `./discover.sh` a few times beforehand until it has eve
 then run `deploy.sh`. Delete `found.yaml` (or re-run `./discover.sh`) to force a fresh scan,
 e.g. after a device's IP changes.
 
+The final health check polls for up to 20s before giving up — first-time package
+installs and a cold service start can take longer than a couple of seconds.
+
+If a run fails, re-run with `-v`/`--verbose` for full shell tracing and unfiltered
+apt/pip output instead of the default filtered summary:
+
+```bash
+sudo ./deploy.sh --verbose
+```
+
 ---
 
 ## Configuration
