@@ -1,0 +1,7 @@
+# System packages required by discover.sh / deploy.sh.
+# One package per line; consumed by tooling the same way requirements.txt
+# is consumed for Python dependencies.
+nmap
+curl
+python3
+python3-pip
