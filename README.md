@@ -78,12 +78,19 @@ Emulator (port 80), and prints what it finds:
 ./discover.sh --generate-config            # scan + write solis/config.cfg and deye/config.cfg
 ```
 
-**Discovery can be flaky** — a single scan sometimes misses the inverter, sometimes the
-battery, sometimes both, depending on network timing. To make that survivable, every run
-(whether or not `--generate-config` is passed) merges its results into **`found.yaml`** in
-the project root: a device recorded on an earlier run is kept even if a later scan doesn't
-see it, so re-running `./discover.sh` a few times converges on having everything recorded
-without losing what was already found.
+**Discovery can be flaky** — a single scan sometimes misses the inverter, sometimes a
+battery, sometimes both, depending on network timing. To make that survivable, an inverter
+scan that comes back empty falls back to whatever was recorded on an earlier run (whether
+or not `--generate-config` is passed), merged into **`found.yaml`** in the project root, so
+re-running `./discover.sh` a few times converges on having everything recorded without
+losing what was already found.
+
+Batteries support more than one (`batt_id: "1"`, `"2"`, ... in `configurable-exporter`,
+assigned in IP order). Unlike the inverter fallback, a scan that finds at least one battery
+*replaces* the whole recorded battery list rather than merging into it — so swapping a
+battery's Arduino (new MAC, possibly a new IP) just becomes the new entry on the next scan,
+with no leftover ghost of the old one. Only a scan that finds zero batteries falls back to
+what was already known.
 
 `found.yaml` looks like:
 
@@ -99,9 +106,13 @@ deye_sn: ""
 deye_last_seen: ""
 
 battery_found: true
-battery_ip: "192.168.22.60"
-battery_mac: "AA:BB:CC:DD:EE:01"
-battery_last_seen: "2026-07-30T09:00:00Z"
+battery_count: 2
+battery_1_ip: "192.168.22.60"
+battery_1_mac: "AA:BB:CC:DD:EE:01"
+battery_1_last_seen: "2026-07-30T09:00:00Z"
+battery_2_ip: "192.168.22.61"
+battery_2_mac: "AA:BB:CC:DD:EE:02"
+battery_2_last_seen: "2026-07-30T09:00:00Z"
 ```
 
 If your scan is unreliable, run it a few times until `found.yaml` shows everything you need:
