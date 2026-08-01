@@ -10,11 +10,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 VERBOSE=0
 RUN_SERVICE_AS=""
+RATED_POWER_KW=""
+MPPT_COUNT=""
+SELLING_ENABLED=""
 for arg in "$@"; do
     case "$arg" in
         -h|--help)
             cat <<'EOF'
 Usage: sudo ./deploy.sh [-v|--verbose] [--run-service-as=<user>]
+                         [--rated-power-kw=<N>] [--mppt-count=<N>]
+                         [--selling-enabled=true|false]
 
 One-time deployment for solar-management. Steps performed:
   1. Install system packages  (nmap curl python3 python3-pip)
@@ -33,6 +38,13 @@ Safe to re-run – all steps are idempotent.
                              apt/pip output, for debugging a failed run.
   --run-service-as=<user>   Systemd unit's User=. Defaults to whoever ran
                              sudo (falls back to $USER if that's unset).
+  --rated-power-kw=<N>      Passed through to discover.sh --generate-config:
+                             sets inverter_power_kw in config.cfg (both
+                             brands). Only takes effect while generating a
+                             fresh config.cfg -- see discover.sh --help.
+  --mppt-count=<N>          Same, but mppt_count -- Solis config only.
+  --selling-enabled=true|false
+                             Same, but selling_enabled (both brands).
 
 Tip: if discovery is flaky (inverter/battery not always found on the same
 scan), run ./discover.sh a few times beforehand until found.yaml shows
@@ -47,8 +59,22 @@ EOF
         --run-service-as=*)
             RUN_SERVICE_AS="${arg#*=}"
             ;;
+        --rated-power-kw=*)
+            RATED_POWER_KW="${arg#*=}"
+            ;;
+        --mppt-count=*)
+            MPPT_COUNT="${arg#*=}"
+            ;;
+        --selling-enabled=*)
+            SELLING_ENABLED="${arg#*=}"
+            ;;
     esac
 done
+
+DISCOVER_FLAGS=()
+[[ -n "$RATED_POWER_KW" ]] && DISCOVER_FLAGS+=(--rated-power-kw="$RATED_POWER_KW")
+[[ -n "$MPPT_COUNT" ]] && DISCOVER_FLAGS+=(--mppt-count="$MPPT_COUNT")
+[[ -n "$SELLING_ENABLED" ]] && DISCOVER_FLAGS+=(--selling-enabled="$SELLING_ENABLED")
 
 (( VERBOSE )) && set -x
 
@@ -138,11 +164,11 @@ FOUND_FILE="$SCRIPT_DIR/found.yaml"
 if [[ -f "$FOUND_FILE" ]]; then
     echo "  found.yaml already exists – reusing it instead of re-scanning"
     echo "  (run ./discover.sh beforehand to refresh it, e.g. if IPs changed)"
-    DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config --from-file 2>&1) \
+    DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config --from-file "${DISCOVER_FLAGS[@]}" 2>&1) \
         || { echo "$DISCOVER_OUT"; die "discover.sh failed"; }
 else
     echo "  No found.yaml yet – running a live scan"
-    DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config 2>&1) \
+    DISCOVER_OUT=$("$SCRIPT_DIR/discover.sh" --generate-config "${DISCOVER_FLAGS[@]}" 2>&1) \
         || { echo "$DISCOVER_OUT"; die "discover.sh failed"; }
 fi
 echo "$DISCOVER_OUT"

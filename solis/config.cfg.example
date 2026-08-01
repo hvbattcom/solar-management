@@ -29,6 +29,12 @@ mppt_count = 3
 # dashboards keep working during migration. Default off. Remove after migration.
 # legacy_metrics = true
 
+# Whether this plant sells energy back to the grid -- purely informational,
+# exposed as plant_feature_enabled{feature="selling"} for dashboards to key
+# panel visibility off of (e.g. hide price panels on self-consumption-only
+# sites). Has no effect on inverter communication.
+selling_enabled = false
+
 [SolisAPI]
 # Bind address and port for solis-api.py (also used by dispatch.py to reach it)
 host = 0.0.0.0

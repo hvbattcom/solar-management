@@ -237,6 +237,7 @@ def load_config(path: Path = None) -> dict:
         "brand":          "deye",
         "verbose":        sec.getboolean("verbose", fallback=False),
         "inverter_power_w": sec.getfloat("inverter_power_kw", fallback=8.0) * 1000.0,
+        "selling_enabled": sec.getboolean("selling_enabled", fallback=False),
     }
 
 # ── Numeric helpers ───────────────────────────────────────────────────────────
@@ -417,6 +418,7 @@ def build_context(raw: dict, cfg: dict) -> dict:
         "serial":               str(cfg["sn"]),
         "inverter_rated_power_w": int(rated_w),
         "mppt_count":           mppt_count,
+        "selling_enabled":      cfg.get("selling_enabled", False),
 
         # ── Status ────────────────────────────────────────────────────────────
         "status":          status,
