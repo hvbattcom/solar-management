@@ -133,6 +133,39 @@ yaml_get() {
         | sed -e "s/^${key}: //" -e 's/^"//' -e 's/"$//' || true
 }
 
+# Batteries are recorded as numbered flat keys (battery_1_ip, battery_2_ip,
+# ...) rather than a real YAML list, so yaml_get's plain grep can still read
+# them back -- no yq/python-yaml dependency needed.
+read_prev_batteries() {
+    PREV_BATTERY_IPS=() PREV_BATTERY_MACS=() PREV_BATTERY_SEEN=()
+    local count i
+    count=$(yaml_get "$FOUND_FILE" battery_count)
+    [[ "$count" =~ ^[0-9]+$ ]] || return 0
+    for (( i = 1; i <= count; i++ )); do
+        PREV_BATTERY_IPS+=("$(yaml_get "$FOUND_FILE" "battery_${i}_ip")")
+        PREV_BATTERY_MACS+=("$(yaml_get "$FOUND_FILE" "battery_${i}_mac")")
+        PREV_BATTERY_SEEN+=("$(yaml_get "$FOUND_FILE" "battery_${i}_last_seen")")
+    done
+}
+
+# Sorts the FINAL_BATTERY_* arrays in place by IP (numeric per-octet, not
+# lexical) -- batt_id in configurable-exporter is assigned by this order.
+sort_final_batteries_by_ip() {
+    local n=${#FINAL_BATTERY_IPS[@]}
+    (( n > 1 )) || return 0
+    local i order new_ips=() new_macs=() new_seen=()
+    order=$(for (( i = 0; i < n; i++ )); do printf '%s %d\n' "${FINAL_BATTERY_IPS[$i]}" "$i"; done \
+        | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | awk '{print $2}')
+    while IFS= read -r i; do
+        new_ips+=("${FINAL_BATTERY_IPS[$i]}")
+        new_macs+=("${FINAL_BATTERY_MACS[$i]}")
+        new_seen+=("${FINAL_BATTERY_SEEN[$i]}")
+    done <<< "$order"
+    FINAL_BATTERY_IPS=("${new_ips[@]}")
+    FINAL_BATTERY_MACS=("${new_macs[@]}")
+    FINAL_BATTERY_SEEN=("${new_seen[@]}")
+}
+
 # Previously recorded devices, if any – carried forward unless this run overrides them
 PREV_SOLIS_IP=$(yaml_get "$FOUND_FILE" solis_ip)
 PREV_SOLIS_SERIAL=$(yaml_get "$FOUND_FILE" solis_serial)
@@ -140,9 +173,7 @@ PREV_SOLIS_LAST_SEEN=$(yaml_get "$FOUND_FILE" solis_last_seen)
 PREV_DEYE_IP=$(yaml_get "$FOUND_FILE" deye_ip)
 PREV_DEYE_SN=$(yaml_get "$FOUND_FILE" deye_sn)
 PREV_DEYE_LAST_SEEN=$(yaml_get "$FOUND_FILE" deye_last_seen)
-PREV_BATTERY_IP=$(yaml_get "$FOUND_FILE" battery_ip)
-PREV_BATTERY_MAC=$(yaml_get "$FOUND_FILE" battery_mac)
-PREV_BATTERY_LAST_SEEN=$(yaml_get "$FOUND_FILE" battery_last_seen)
+read_prev_batteries
 
 if (( FROM_FILE )) && [[ ! -f "$FOUND_FILE" ]]; then
     echo "ERROR: --from-file given but $FOUND_FILE does not exist yet — run ./discover.sh at least once first" >&2
@@ -226,7 +257,8 @@ found=0
 # First device of each type seen *this run* – "" means not seen this run
 SOLIS_IP="" SOLIS_SERIAL=""
 DEYE_IP=""  DEYE_SN=""
-BATTERY_IP="" BATTERY_MAC=""
+# Every battery emulator seen this run (there can be more than one)
+BATTERY_IPS=() BATTERY_MACS=()
 
 if (( ! FROM_FILE )); then
     echo "Scanning $SUBNET …" >&2
@@ -273,7 +305,8 @@ if (( ! FROM_FILE )); then
         if grep -qw 80 <<< "$PORTS"; then
             if probe_battery_emulator "$IP" "$MAC"; then
                 found=1
-                [[ -z "$BATTERY_IP" ]] && { BATTERY_IP="$IP"; BATTERY_MAC="$MAC"; }
+                BATTERY_IPS+=("$IP")
+                BATTERY_MACS+=("$MAC")
             fi
         fi
 
@@ -291,7 +324,6 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if (( FROM_FILE )); then
     FINAL_SOLIS_IP="$PREV_SOLIS_IP"; FINAL_SOLIS_SERIAL="$PREV_SOLIS_SERIAL"; FINAL_SOLIS_SEEN="$PREV_SOLIS_LAST_SEEN"
     FINAL_DEYE_IP="$PREV_DEYE_IP";   FINAL_DEYE_SN="$PREV_DEYE_SN";           FINAL_DEYE_SEEN="$PREV_DEYE_LAST_SEEN"
-    FINAL_BATTERY_IP="$PREV_BATTERY_IP"; FINAL_BATTERY_MAC="$PREV_BATTERY_MAC"; FINAL_BATTERY_SEEN="$PREV_BATTERY_LAST_SEEN"
 else
     if [[ -n "$SOLIS_IP" ]]; then
         FINAL_SOLIS_IP="$SOLIS_IP"; FINAL_SOLIS_SERIAL="$SOLIS_SERIAL"; FINAL_SOLIS_SEEN="$NOW"
@@ -305,10 +337,22 @@ else
         FINAL_DEYE_IP="$PREV_DEYE_IP"; FINAL_DEYE_SN="$PREV_DEYE_SN"; FINAL_DEYE_SEEN="$PREV_DEYE_LAST_SEEN"
     fi
 
-    if [[ -n "$BATTERY_IP" ]]; then
-        FINAL_BATTERY_IP="$BATTERY_IP"; FINAL_BATTERY_MAC="$BATTERY_MAC"; FINAL_BATTERY_SEEN="$NOW"
+    # Batteries: if this scan found at least one, its full result *replaces*
+    # the recorded list wholesale rather than merging with history -- so
+    # swapping a battery's Arduino (new MAC, possibly new IP) just becomes
+    # the new entry next scan, with no leftover ghost of the old one. Only a
+    # scan that finds zero batteries falls back to what was already known
+    # (protects against a one-off flaky scan, same as solis/deye above).
+    if (( ${#BATTERY_IPS[@]} > 0 )); then
+        FINAL_BATTERY_IPS=("${BATTERY_IPS[@]}")
+        FINAL_BATTERY_MACS=("${BATTERY_MACS[@]}")
+        FINAL_BATTERY_SEEN=()
+        for _ in "${BATTERY_IPS[@]}"; do FINAL_BATTERY_SEEN+=("$NOW"); done
+        sort_final_batteries_by_ip
     else
-        FINAL_BATTERY_IP="$PREV_BATTERY_IP"; FINAL_BATTERY_MAC="$PREV_BATTERY_MAC"; FINAL_BATTERY_SEEN="$PREV_BATTERY_LAST_SEEN"
+        FINAL_BATTERY_IPS=("${PREV_BATTERY_IPS[@]}")
+        FINAL_BATTERY_MACS=("${PREV_BATTERY_MACS[@]}")
+        FINAL_BATTERY_SEEN=("${PREV_BATTERY_SEEN[@]}")
     fi
 
     {
@@ -326,17 +370,28 @@ else
         echo "deye_sn: \"$FINAL_DEYE_SN\""
         echo "deye_last_seen: \"$FINAL_DEYE_SEEN\""
         echo ""
-        echo "battery_found: $([[ -n "$FINAL_BATTERY_IP" ]] && echo true || echo false)"
-        echo "battery_ip: \"$FINAL_BATTERY_IP\""
-        echo "battery_mac: \"$FINAL_BATTERY_MAC\""
-        echo "battery_last_seen: \"$FINAL_BATTERY_SEEN\""
+        echo "battery_found: $([[ ${#FINAL_BATTERY_IPS[@]} -gt 0 ]] && echo true || echo false)"
+        echo "battery_count: ${#FINAL_BATTERY_IPS[@]}"
+        for (( i = 0; i < ${#FINAL_BATTERY_IPS[@]}; i++ )); do
+            n=$((i + 1))
+            echo "battery_${n}_ip: \"${FINAL_BATTERY_IPS[$i]}\""
+            echo "battery_${n}_mac: \"${FINAL_BATTERY_MACS[$i]}\""
+            echo "battery_${n}_last_seen: \"${FINAL_BATTERY_SEEN[$i]}\""
+        done
     } > "$FOUND_FILE"
 
     echo "" >&2
     echo "Updated $FOUND_FILE:" >&2
     printf "  Solis inverter    : %s\n" "$([[ -n "$FINAL_SOLIS_IP"   ]] && echo "✓ $FINAL_SOLIS_IP" || echo "✗ not yet found")" >&2
     printf "  Deye inverter     : %s\n" "$([[ -n "$FINAL_DEYE_IP"    ]] && echo "✓ $FINAL_DEYE_IP"  || echo "✗ not yet found")" >&2
-    printf "  Battery Emulator  : %s\n" "$([[ -n "$FINAL_BATTERY_IP" ]] && echo "✓ $FINAL_BATTERY_IP" || echo "✗ not yet found")" >&2
+    if (( ${#FINAL_BATTERY_IPS[@]} > 0 )); then
+        printf "  Battery Emulator  : ✓ %d found\n" "${#FINAL_BATTERY_IPS[@]}" >&2
+        for (( i = 0; i < ${#FINAL_BATTERY_IPS[@]}; i++ )); do
+            printf "    batt_id=%d  %s  (%s)\n" "$((i + 1))" "${FINAL_BATTERY_IPS[$i]}" "${FINAL_BATTERY_MACS[$i]}" >&2
+        done
+    else
+        echo "  Battery Emulator  : ✗ not yet found" >&2
+    fi
 fi
 
 # ── Config generation ─────────────────────────────────────────────────────────
