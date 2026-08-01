@@ -13,3 +13,9 @@ inverter_power_kw = 30.0
 
 # Enable verbose logging for debugging (true/false)
 verbose = false
+
+# Whether this plant sells energy back to the grid -- purely informational,
+# exposed as plant_feature_enabled{feature="selling"} for dashboards to key
+# panel visibility off of (e.g. hide price panels on self-consumption-only
+# sites). Has no effect on inverter communication.
+selling_enabled = false

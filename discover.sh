@@ -32,6 +32,13 @@ Usage: discover.sh [SUBNET] [TIMEOUT] [OPTIONS]
   --from-file       Skip the network scan; reuse whatever is already recorded
                     in found.yaml (combine with --generate-config to (re)write
                     config.cfg files without re-scanning)
+  --rated-power-kw=N   With --generate-config, also set inverter_power_kw in
+                        whichever config.cfg gets generated (both brands).
+  --mppt-count=N        Same, but mppt_count -- Solis config only; Deye
+                        auto-detects this from a hardware register instead.
+  --selling-enabled=true|false
+                        Same, but selling_enabled (both brands) -- whether
+                        this plant sells energy back to the grid.
   -h, --help        Show this help
 
 Every run (scan or --from-file) merges results into found.yaml: a device found
@@ -110,11 +117,17 @@ FOUND_FILE="$SCRIPT_DIR/found.yaml"
 
 GENERATE_CONFIG=0
 FROM_FILE=0
+RATED_POWER_KW=""
+MPPT_COUNT=""
+SELLING_ENABLED=""
 POSITIONAL=()
 for arg in "$@"; do
     case "$arg" in
         --generate-config) GENERATE_CONFIG=1 ;;
         --from-file) FROM_FILE=1 ;;
+        --rated-power-kw=*) RATED_POWER_KW="${arg#*=}" ;;
+        --mppt-count=*) MPPT_COUNT="${arg#*=}" ;;
+        --selling-enabled=*) SELLING_ENABLED="${arg#*=}" ;;
         -h|--help) ;; # already handled above
         *) POSITIONAL+=("$arg") ;;
     esac
@@ -404,10 +417,14 @@ if (( GENERATE_CONFIG )); then
     if [[ -n "$FINAL_SOLIS_IP" ]]; then
         src="$SCRIPT_DIR/solis/config.cfg.example"
         dst="$SCRIPT_DIR/solis/config.cfg"
-        sed \
-            -e "s|^inverter_ip = .*|inverter_ip = $FINAL_SOLIS_IP|" \
-            -e "s|^serial = .*|serial = $FINAL_SOLIS_SERIAL|" \
-            "$src" > "$dst"
+        SOLIS_SED_ARGS=(
+            -e "s|^inverter_ip = .*|inverter_ip = $FINAL_SOLIS_IP|"
+            -e "s|^serial = .*|serial = $FINAL_SOLIS_SERIAL|"
+        )
+        [[ -n "$RATED_POWER_KW" ]] && SOLIS_SED_ARGS+=(-e "s|^inverter_power_kw = .*|inverter_power_kw = $RATED_POWER_KW|")
+        [[ -n "$MPPT_COUNT" ]] && SOLIS_SED_ARGS+=(-e "s|^mppt_count = .*|mppt_count = $MPPT_COUNT|")
+        [[ -n "$SELLING_ENABLED" ]] && SOLIS_SED_ARGS+=(-e "s|^selling_enabled = .*|selling_enabled = $SELLING_ENABLED|")
+        sed "${SOLIS_SED_ARGS[@]}" "$src" > "$dst"
         echo "Generated solis/config.cfg  (IP: $FINAL_SOLIS_IP  serial: $FINAL_SOLIS_SERIAL)"
         generated=1
     else
@@ -417,10 +434,15 @@ if (( GENERATE_CONFIG )); then
     if [[ -n "$FINAL_DEYE_IP" ]]; then
         src="$SCRIPT_DIR/deye/config.cfg.example"
         dst="$SCRIPT_DIR/deye/config.cfg"
-        sed \
-            -e "s|^inverter_ip = .*|inverter_ip = $FINAL_DEYE_IP|" \
-            -e "s|^inverter_sn = .*|inverter_sn = $FINAL_DEYE_SN|" \
-            "$src" > "$dst"
+        DEYE_SED_ARGS=(
+            -e "s|^inverter_ip = .*|inverter_ip = $FINAL_DEYE_IP|"
+            -e "s|^inverter_sn = .*|inverter_sn = $FINAL_DEYE_SN|"
+        )
+        [[ -n "$RATED_POWER_KW" ]] && DEYE_SED_ARGS+=(-e "s|^inverter_power_kw = .*|inverter_power_kw = $RATED_POWER_KW|")
+        # No --mppt-count here: Deye auto-detects MPPT count from a hardware
+        # register (see deye-monitor.py), there's no config key to override.
+        [[ -n "$SELLING_ENABLED" ]] && DEYE_SED_ARGS+=(-e "s|^selling_enabled = .*|selling_enabled = $SELLING_ENABLED|")
+        sed "${DEYE_SED_ARGS[@]}" "$src" > "$dst"
         echo "Generated deye/config.cfg   (IP: $FINAL_DEYE_IP  SN: $FINAL_DEYE_SN)"
         generated=1
     else
