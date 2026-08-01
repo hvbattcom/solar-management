@@ -19,6 +19,10 @@ inverter_rated_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ inverter_ra
 # TYPE inverter_mppt_count gauge
 inverter_mppt_count{brand="{{ brand }}",serial="{{ serial }}"} {{ mppt_count }}
 
+# HELP plant_feature_enabled Whether an optional plant feature is enabled (config, not telemetry)
+# TYPE plant_feature_enabled gauge
+plant_feature_enabled{brand="{{ brand }}",serial="{{ serial }}",feature="selling"} {{ 1 if selling_enabled else 0 }}
+
 # HELP inverter_temperature_c Temperature celsius
 # TYPE inverter_temperature_c gauge
 {% for t in temperatures %}inverter_temperature_c{brand="{{ brand }}",serial="{{ serial }}",sensor="{{ t.sensor }}"} {{ t.value }}
