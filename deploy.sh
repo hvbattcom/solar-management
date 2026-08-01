@@ -9,11 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ── Help / flags ──────────────────────────────────────────────────────────────
 
 VERBOSE=0
+RUN_SERVICE_AS=""
 for arg in "$@"; do
     case "$arg" in
         -h|--help)
             cat <<'EOF'
-Usage: sudo ./deploy.sh [-v|--verbose]
+Usage: sudo ./deploy.sh [-v|--verbose] [--run-service-as=<user>]
 
 One-time deployment for solar-management. Steps performed:
   1. Install system packages  (nmap curl python3 python3-pip)
@@ -28,8 +29,10 @@ One-time deployment for solar-management. Steps performed:
 
 Safe to re-run – all steps are idempotent.
 
-  -v, --verbose  Full shell tracing (set -x) plus unfiltered apt/pip
-                 output, for debugging a failed run.
+  -v, --verbose             Full shell tracing (set -x) plus unfiltered
+                             apt/pip output, for debugging a failed run.
+  --run-service-as=<user>   Systemd unit's User=. Defaults to whoever ran
+                             sudo (falls back to $USER if that's unset).
 
 Tip: if discovery is flaky (inverter/battery not always found on the same
 scan), run ./discover.sh a few times beforehand until found.yaml shows
@@ -40,6 +43,9 @@ EOF
             ;;
         -v|--verbose)
             VERBOSE=1
+            ;;
+        --run-service-as=*)
+            RUN_SERVICE_AS="${arg#*=}"
             ;;
     esac
 done
@@ -73,7 +79,7 @@ yaml_get() {
 # ── Sudo guard ────────────────────────────────────────────────────────────────
 
 [[ $EUID -eq 0 ]] || die "Must run as root:  sudo $0"
-SERVICE_USER="${SUDO_USER:-$USER}"
+SERVICE_USER="${RUN_SERVICE_AS:-${SUDO_USER:-$USER}}"
 debug "service user: $SERVICE_USER"
 
 # ── Step 1: System packages ───────────────────────────────────────────────────
