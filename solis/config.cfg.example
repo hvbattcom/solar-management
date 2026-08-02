@@ -10,8 +10,13 @@ inverter_port = 502
 # Modbus device id / unit id
 slave_id = 1
 
-# Expected inverter serial – if mismatch, output is suppressed and error returned
-# Leave empty to skip serial check
+# Expected inverter serial – if mismatch, the serial registers are re-read once;
+# if it still mismatches, output is suppressed and an error is returned (/metrics
+# answers 502, so the scrape fails instead of publishing data under a wrong serial).
+# STRONGLY RECOMMENDED: `serial` is a label on every exported metric, so a single
+# corrupted Modbus read forks the whole metric set onto a new Prometheus series.
+# Leave empty only if the serial is unknown – the monitor then pins the first
+# serial that two consecutive reads agree on and checks every later poll against it.
 serial = <logger_serial>
 
 # Inverter rated power in kW – used to calculate load percentages
