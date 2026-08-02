@@ -344,7 +344,14 @@ def build_context(raw: dict, cfg: dict) -> dict:
     inverter_phases = []
     inverter_total  = 0.0
     for i, (v_r, c_r, p_r) in enumerate(inv_regs):
-        v, c, p = get(v_r), get(c_r), get(p_r)
+        v, c, p_raw = get(v_r), get(c_r), get(p_r)
+        # Raw register reads negative during observed idle/standby states
+        # (PV=0, inverter not actively delivering) while grid import stays
+        # correctly positive elsewhere -- suggests this register's sign is
+        # inverted relative to the intended output-power convention.
+        # Flipped provisionally; needs confirming against real daytime
+        # production data (positive = delivering power) before trusting.
+        p = -p_raw if p_raw is not None else None
         inverter_total += p
         inverter_phases.append({
             "name":     f"L{i + 1}",
