@@ -16,6 +16,13 @@ Improvements over v2 (reliability):
 * Whole-poll retry (up to MAX_POLL_ATTEMPTS=3) when too many None values
 * Inter-block delay to avoid overwhelming inverter Modbus buffer
 * Explicit reconnect with one retry on initial connection failure
+
+Serial integrity (see the "Serial check" section):
+* verify_serial() runs inside poll(), so the API's /metrics — not just the CLI —
+  refuses to export data read under an untrusted serial
+* A mismatching serial triggers exactly one re-read before the poll is failed
+* With no `serial` in config, the first double-confirmed serial is pinned and
+  every later poll is checked against it
 """
 
 import argparse
@@ -508,6 +515,17 @@ def decode_ascii(registers):
     for reg in registers:
         chars.append(chr((reg >> 8) & 0xFF))
         chars.append(chr(reg & 0xFF))
+    # NULs are legitimate padding here (each register carries one char in its
+    # low byte). Any other non-printable byte is corruption on the wire — it
+    # gets dropped, silently shortening the string, so flag it rather than let
+    # the shorter value pass for a genuine one.
+    junk = {c for c in chars if not (32 <= ord(c) <= 126) and c != "\x00"}
+    if junk:
+        print(
+            "#WARN: non-printable bytes in ASCII field "
+            f"({', '.join(f'0x{ord(c):02X}' for c in sorted(junk))}) — dropped",
+            file=sys.stderr,
+        )
     return "".join(c for c in chars if 32 <= ord(c) <= 126).strip()
 
 def decode_value(sensor, raw):
@@ -807,13 +825,86 @@ def build_values(regmap, cfg):
     return values, skipped
 
 # ── Serial check ─────────────────────────────────────────────────────────────
+#
+# The serial arrives as ASCII over Modbus, and a single flipped bit turns it
+# into a different-but-printable string ('0' 0x30 → 'p' 0x70) or, when the
+# corrupted byte lands outside the printable range, decode_ascii() drops it and
+# the serial silently comes back one character short. Because `serial` is a
+# label on every exported metric, publishing one corrupted read forks the whole
+# metric set onto a new Prometheus time series. A serial that cannot be trusted
+# must therefore suppress the poll, not be exported.
 
-def check_serial(values, cfg):
+# A well-formed serial is uppercase alphanumeric. The length bound is
+# deliberately loose so models with shorter/longer serials are not rejected
+# outright — exact verification comes from `serial` in config, or failing that
+# from the pinned first read below.
+SERIAL_RE = re.compile(r"^[0-9A-Z]{8,24}$")
+
+_pinned_serial = None   # first double-confirmed serial seen in this process
+
+
+class SerialMismatch(Exception):
+    """Raised when the serial read from the device cannot be trusted."""
+    def __init__(self, expected, read):
+        self.expected = expected
+        self.read     = read
+        super().__init__(f"serial mismatch: expected={expected!r} read={read!r}")
+
+
+def serial_reference(cfg):
+    """The serial the device is required to report — configured, else pinned."""
+    return cfg["expected_serial"] or _pinned_serial or ""
+
+
+def _reread_serial(client, cfg):
+    """Re-read only the serial registers. Returns the decoded serial, or None."""
+    sensor  = next(s for s in SENSORS if s["key"] == "serial")
+    regs    = sensor["registers"]
+    address = regs[0] - 1 if cfg["use_zero_based"] else regs[0]
+    rr = client.read_input_registers(
+        address=address, count=len(regs), device_id=cfg["slave_id"]
+    )
+    if rr.isError():
+        print(f"#WARN: serial re-read failed: {rr}", file=sys.stderr)
+        return None
+    return decode_ascii(rr.registers)
+
+
+def verify_serial(client, values, cfg):
+    """
+    Validate the serial decoded in this poll, re-reading the serial registers
+    exactly once when it looks wrong. Returns the trusted serial (and corrects
+    `values` if the re-read did). Raises SerialMismatch if it stays untrusted.
+    """
+    global _pinned_serial
+
     read_serial = str(values.get("serial", "")).strip()
-    exp_serial  = cfg["expected_serial"]
-    if not exp_serial:
-        return True, read_serial
-    return (read_serial == exp_serial), read_serial
+    reference   = serial_reference(cfg)
+
+    if reference:
+        if read_serial == reference:
+            return read_serial
+        print(
+            f"#WARN: serial {read_serial!r} != expected {reference!r} — re-reading once",
+            file=sys.stderr,
+        )
+        again = _reread_serial(client, cfg)
+        if again == reference:
+            values["serial"] = again
+            return again
+        raise SerialMismatch(reference, read_serial if again is None else again)
+
+    # No reference yet. Pin the serial only once a second, independent read
+    # agrees with it — otherwise the first poll after a restart could pin a
+    # corrupted value and reject every good read from then on.
+    if not SERIAL_RE.match(read_serial):
+        raise SerialMismatch("<well-formed serial>", read_serial)
+    again = _reread_serial(client, cfg)
+    if again != read_serial:
+        raise SerialMismatch("<two agreeing reads>",
+                             f"{read_serial} then {'<read failed>' if again is None else again}")
+    _pinned_serial = read_serial
+    return read_serial
 
 # ── Numeric helpers ───────────────────────────────────────────────────────────
 
@@ -1162,6 +1253,10 @@ def poll(cfg: dict) -> dict:
                 break
             time.sleep(POLL_RETRY_DELAY)
 
+        # Must run before build_context() — a corrupted serial would otherwise
+        # be baked into the label set of every metric this poll exports.
+        verify_serial(client, values, cfg)
+
         ctx = build_context(values, cfg)
         ctx["tou"]     = decode_tou(read_tou_registers(client, cfg))
         ctx["storage"] = decode_storage(read_storage_registers(client, cfg))
@@ -1381,15 +1476,16 @@ def main():
             time.sleep(POLL_RETRY_DELAY)
 
         # ── Serial check ──
-        serial_ok, read_serial = check_serial(values, cfg)
-        if not serial_ok:
-            exp = cfg["expected_serial"]
+        try:
+            verify_serial(client, values, cfg)
+        except SerialMismatch as exc:
             if args.format == "prometheus":
-                print(serial_error_prometheus(exp, read_serial, cfg["brand"]))
+                print(serial_error_prometheus(exc.expected, exc.read, cfg["brand"]))
             elif args.format == "json":
-                print(json.dumps({"error": "serial_mismatch", "expected": exp, "read": read_serial}))
+                print(json.dumps({"error": "serial_mismatch",
+                                  "expected": exc.expected, "read": exc.read}))
             else:
-                print(serial_error_human(exp, read_serial))
+                print(serial_error_human(exc.expected, exc.read))
             sys.exit(2)
 
         # Diagnostics to stderr
