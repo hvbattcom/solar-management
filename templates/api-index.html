@@ -74,6 +74,13 @@
   .inv-sel-opt { padding: 9px 10px; font-size: .95rem; color: #1e293b; cursor: pointer; }
   .inv-sel-opt:hover { background: #f0f4f8; }
   .inv-sel-opt.sel { color: var(--accent); font-weight: 600; }
+  /* Two-line options: a plain-language name over what it actually does. */
+  .inv-sel-opt .opt-name { display: block; }
+  .inv-sel-opt .opt-desc { display: block; font-size: .78rem; color: #64748b;
+                           font-weight: 400; margin-top: 1px; line-height: 1.3; }
+  .inv-sel-opt.sel .opt-desc { color: #7c8ba1; }
+  .sel-hint { font-size: .78rem; color: #64748b; line-height: 1.35; margin-top: 5px; }
+  .lbl-note { font-weight: 400; color: #94a3b8; font-size: .8rem; }
 
   /* ── Toggle ── */
   .inv .tog { display: flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -229,15 +236,32 @@
             <div class="setting-row">
               <!-- Deye: limit control (reg 142) shown as "Mode" -->
               <div class="field" id="deye-mode-field" style="display:none">
-                <label>Mode</label>
-                <div class="inv-sel" id="zero_export" data-value="Selling First" onclick="selToggle(this)">
-                  <div class="inv-sel-val">Selling First</div>
+                <label>Mode <span class="lbl-note">— what may leave the plant</span></label>
+                <div class="inv-sel" id="zero_export" data-value="Selling First"
+                     data-hint="mode-hint" onclick="selToggle(this)">
+                  <div class="inv-sel-val">Export allowed</div>
                   <div class="inv-sel-opts">
-                    <div class="inv-sel-opt sel" onclick="selPick(this, event)">Selling First</div>
-                    <div class="inv-sel-opt"     onclick="selPick(this, event)">Zero Export to Load</div>
-                    <div class="inv-sel-opt"     onclick="selPick(this, event)">Zero Export to CT</div>
+                    <div class="inv-sel-opt sel" data-val="Selling First"
+                         data-hint="Exports up to Sell Power. Draws from PV and, wherever a ToU slot's SOC target sits below the current level, from the battery too."
+                         onclick="selPick(this, event)">
+                      <span class="opt-name">Export allowed</span>
+                      <span class="opt-desc">Sells to grid — can also sell the battery</span>
+                    </div>
+                    <div class="inv-sel-opt" data-val="Zero Export to CT"
+                         data-hint="Nothing is exported, measured at the grid meter. The battery still serves the house."
+                         onclick="selPick(this, event)">
+                      <span class="opt-name">No export (grid meter)</span>
+                      <span class="opt-desc">Nothing leaves the plant — battery still serves the house</span>
+                    </div>
+                    <div class="inv-sel-opt" data-val="Zero Export to Load"
+                         data-hint="Nothing is exported, measured at the load side."
+                         onclick="selPick(this, event)">
+                      <span class="opt-name">No export (load side)</span>
+                      <span class="opt-desc">Nothing leaves the plant — limited at the load</span>
+                    </div>
                   </div>
                 </div>
+                <div class="sel-hint" id="mode-hint"></div>
               </div>
               <!-- Solis: energy_mode as "Mode" / Deye: hidden "Energy Pattern" -->
               <div class="field" id="solis-mode-field" style="display:none">
@@ -342,7 +366,7 @@
                 <th class="col-time">Start</th>
                 <th class="col-time">End</th>
                 <th class="col-n">Power W</th>
-                <th class="col-n">SOC %</th>
+                <th class="col-n" title="The level the inverter drives the battery TOWARD during this slot — not a floor it merely refuses to cross. Below the current SoC it will discharge, and with Mode set to Export allowed it exports the battery to the grid.">SOC&nbsp;% target</th>
               </tr>
             </thead>
             <tbody id="tou-body"></tbody>
@@ -484,13 +508,21 @@ function applyBrand(info) {
 }
 
 /* ── Custom select ────────────────────────────────────────────────────────── */
+/* An option's submitted value is data-val where present, so a row can carry a
+   plain-language name and an explanation without changing what the firmware
+   is sent. Options built without data-val keep behaving as before. */
+const _optVal = o => o.dataset.val ?? o.textContent.trim();
+
 function selSet(id, val) {
   const sel = document.getElementById(id);
-  const opt = [...sel.querySelectorAll('.inv-sel-opt')].find(o => o.textContent === val);
+  const opt = [...sel.querySelectorAll('.inv-sel-opt')].find(o => _optVal(o) === val);
   if (!opt) return;
   sel.dataset.value = val;
-  sel.querySelector('.inv-sel-val').textContent = val;
+  sel.querySelector('.inv-sel-val').textContent =
+    opt.querySelector('.opt-name')?.textContent ?? val;
   sel.querySelectorAll('.inv-sel-opt').forEach(o => o.classList.toggle('sel', o === opt));
+  const hint = document.getElementById(sel.dataset.hint || '');
+  if (hint) hint.textContent = opt.dataset.hint || '';
 }
 function selToggle(el) {
   const isOpen = el.classList.contains('open');
@@ -498,7 +530,7 @@ function selToggle(el) {
   if (!isOpen) el.classList.add('open');
 }
 function selPick(opt, e) {
-  selSet(opt.closest('.inv-sel').id, opt.textContent);
+  selSet(opt.closest('.inv-sel').id, _optVal(opt));
   opt.closest('.inv-sel').classList.remove('open');
   e.stopPropagation();
 }

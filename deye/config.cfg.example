@@ -46,31 +46,17 @@ max_charge_amps = 0
 # nothing about the connection agreement. 0 = no cap.
 max_sell_power_w = 0
 
-# SOC floor written into TOU slots that are NOT selling windows, used only as a
-# fallback: the pushed map's own soc_min_pct normally supplies it.
-idle_floor_pct = 10
-
-# Upper end of the battery's SOC envelope, again only a fallback for maps that
-# predate soc_max_pct.
-soc_max_pct = 100
-
-# Whether to sell surplus solar OUTSIDE the plan's battery-discharge windows.
+# Whether to sell surplus solar outside the plan's battery-discharge windows.
 #
-# Deye cannot express "sell solar but leave the battery alone": one sell-power
-# register and one per-slot SOC target govern both, and a slot target below the
-# current level is an instruction to empty the pack into the grid.
+# Deye cannot express "sell the PV but not the battery": one work mode governs
+# both, against a slot SOC that is a target rather than a floor. But a pack
+# already AT its target has nothing below the target to drain, so opening the
+# mode there can only move genuine surplus. That is the one safe state, and it
+# is what this enables -- export outside a window only while the battery is
+# full, with the live slot pinned to the top of the envelope meanwhile.
 #
-#   false (default)  Sell power is 0 W outside the planned windows, so idle
-#                    slots can sit at the battery minimum and the battery stays
-#                    free to carry the house. Surplus solar goes to the battery
-#                    first and is otherwise not exported.
-#   true             Sell power follows the plan everywhere, and every slot the
-#                    plan might export through is pinned to soc_max_pct so the
-#                    battery is never the surplus. Sells more solar, but the
-#                    battery cannot serve load during those slots -- on a plant
-#                    whose prices sit above min_sell_price most of the day that
-#                    can mean importing from the grid overnight.
-sell_solar_outside_windows = false
+# Turn it off to never export outside a planned window at all.
+sell_surplus_when_full = true
 
 # Write bit 5 ("sell") of each TOU slot's control register (172-177).
 # Set false if your firmware does not expose a per-slot Sell column -- selling

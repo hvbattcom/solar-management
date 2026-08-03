@@ -29,13 +29,14 @@ Three consequences:
      the plan may export but wants only surplus solar sold, and the battery
      minimum otherwise, where it is free to carry the house.
 
-  3. Export is switched with the WORK MODE, and only ever inside a planned
-     window unless the plant opts out.  "Selling First" is a command to export
-     up to max_sell_power sourcing from PV *and the battery* — not a permission
-     the way Solis's allow_export bit is — so it is safe only while every slot
-     it spans targets at or above where the battery already sits.  Since Deye
-     cannot say "sell solar but not the battery", the default is to not export
-     outside the plan's own discharge windows.
+  3. Export is switched with the WORK MODE.  "Selling First" is a command to
+     export up to max_sell_power sourcing from PV *and the battery* — not a
+     permission the way Solis's allow_export bit is — so it is safe only while
+     the live slot targets at or above where the battery already sits.  It opens
+     inside a planned window, and outside one only while the pack is FULL: at
+     its target there is nothing below the target left to drain, so the only
+     thing that can leave is genuine surplus solar.  That is how "sell the PV
+     but not the battery", which Deye has no way to say, gets said anyway.
 
 Both of the last two are the hard way round: an earlier build mirrored the Solis
 model, and at 95% SoC with an idle slot targeting 15% it dumped a customer's
@@ -110,6 +111,11 @@ TOU_TIME_GRID_MIN = 5
 SOC_MIN_LAST_RESORT = 20
 SOC_MAX_DEFAULT     = 100
 
+# How far below the top of the envelope still counts as "full" for the purpose
+# of selling surplus solar. Also the hysteresis that stops the work mode
+# flapping while the pack sits on the threshold.
+SURPLUS_SOC_MARGIN = 2
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -168,8 +174,8 @@ def load_config(path: Path) -> dict:
         "max_charge_amps": int(srv.get("max_charge_amps", 0)),
         "max_sell_power_w": int(srv.get("max_sell_power_w", 0)),
         "inverter_power_w": int(float(inv.get("inverter_power_kw", 30)) * 1000),
-        "sell_solar_outside_windows":
-            srv.get("sell_solar_outside_windows", "false").strip().lower() == "true",
+        "sell_surplus_when_full":
+            srv.get("sell_surplus_when_full", "true").strip().lower() == "true",
         "write_sell_bit":  srv.get("write_sell_bit", "true").strip().lower() == "true",
     }
 
@@ -250,28 +256,18 @@ def _clamp_soc(value: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, int(value)))
 
 
-def export_mask(events: list) -> list[bool]:
-    """Minute-by-minute map of when the plan wants to export, over one cycle.
+def battery_full(soc: int | None, soc_hi: int) -> bool:
+    """Is the pack at the top of its envelope, with nothing left to give?
 
-    The schedule repeats daily, so the state at 00:00 is whatever the last
-    event of the day left behind rather than a fixed default."""
-    mask  = [False] * DAY_MIN
-    marks = sorted((_tm(e["time"]) % DAY_MIN, bool(e["export"]))
-                   for e in events if "export" in e)
-    if not marks:
-        return mask
-    state, idx = marks[-1][1], 0
-    for minute in range(DAY_MIN):
-        while idx < len(marks) and marks[idx][0] == minute:
-            state = marks[idx][1]
-            idx += 1
-        mask[minute] = state
-    return mask
+    This is what makes selling surplus solar expressible on Deye. The inverter
+    cannot be told "sell the PV but not the battery" — but a battery already at
+    its slot target has nothing below the target to drain, so opening the mode
+    can only move genuine surplus. Below the target the mode stays shut and the
+    PV charges the pack instead, which is where it should go anyway.
 
-
-def _exports_during(mask: list[bool], start: int, end: int) -> bool:
-    span = range(start, end) if start < end else [*range(start, DAY_MIN), *range(0, end)]
-    return any(mask[m] for m in span)
+    The margin makes the decision sticky: without it a pack hovering at the
+    threshold would flip the work mode every five minutes."""
+    return soc is not None and soc >= soc_hi - SURPLUS_SOC_MARGIN
 
 
 # ── Firmware read ─────────────────────────────────────────────────────────────
@@ -410,7 +406,7 @@ def _pad_boundaries(bounds: list[int]) -> list[int]:
 
 def build_desired_slots(tou_slots: list, now_min: int, opts: dict,
                         soc_lo: int, soc_hi: int, sell_power_w: int,
-                        events: list | None = None) -> list[dict]:
+                        selling_surplus: bool = False) -> list[dict]:
     """Turn the plan's discharge windows into the six Deye time points.
 
     A slot's SOC is a TARGET the inverter drives the battery toward, never a
@@ -428,18 +424,19 @@ def build_desired_slots(tou_slots: list, now_min: int, opts: dict,
     it only changes what value an already-existing slot carries."""
     windows = _trim_to_budget(_wrapped_windows(tou_slots), now_min)
     bounds  = _pad_boundaries(_boundaries(windows))
-    # Only relevant when solar is sold outside the windows; otherwise sell power
-    # is 0 W there and a low target cannot leak anything to the grid.
-    mask    = export_mask(events or []) if opts["sell_solar_outside_windows"] else [False] * DAY_MIN
+    now     = now_min % DAY_MIN
 
     slots = []
     for n, start in enumerate(bounds, start=1):
         win = next((w for w in windows if w["start"] <= start < w["end"]), None)
         selling = win is not None
         nxt     = bounds[n % len(bounds)]
+        live    = (start <= now < nxt) if start < nxt else (now >= start or now < nxt)
         if selling:
             target = win["soc_floor_pct"]
-        elif _exports_during(mask, start, nxt):
+        elif selling_surplus and live:
+            # Export is open on a full pack: hold this slot at the top of the
+            # envelope so only genuine surplus leaves, never the battery.
             target = soc_hi
         else:
             target = soc_lo
@@ -538,16 +535,13 @@ def ensure_tou_enabled(fw_tou: dict, api_url: str, dry_run: bool) -> bool:
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
-def exports_now(want: bool, sell_kw: float, in_window: bool) -> bool:
+def exports_now(want: bool, sell_kw: float, export_open: bool) -> bool:
     """Whether the plant should be exporting at this moment.
 
-    `in_window` is False outside a planned battery-sell window while the plant
-    is configured not to sell solar there. Deye cannot separate "sell surplus
-    solar" from "sell the battery" — one work mode governs both, against a slot
-    target that also decides whether the battery may serve the house — so
-    declining to export outside the windows is the only way to leave the battery
-    free for the load."""
-    return bool(want) and sell_kw > 0 and in_window
+    Three things must agree: the plan wants to sell (price), it has a sell power
+    to sell at, and export is permitted right now — inside a planned battery
+    window, or outside one on a pack that is already full."""
+    return bool(want) and sell_kw > 0 and export_open
 
 
 def export_power_w(sell_kw: float, cap_w: int) -> int:
@@ -563,7 +557,7 @@ def export_power_w(sell_kw: float, cap_w: int) -> int:
 
 
 def apply_export(want: bool, fw_general: dict, sell_kw: float, cap_w: int,
-                 api_url: str, dry_run: bool, in_window: bool = True) -> bool:
+                 api_url: str, dry_run: bool, export_open: bool = True) -> bool:
     """Switch export via the work mode, and solar-sell by price.
 
     Two different questions, two different registers:
@@ -577,17 +571,20 @@ def apply_export(want: bool, fw_general: dict, sell_kw: float, cap_w: int,
 
     Keeping them separate means the price signal is honoured verbatim while the
     battery stays governed by the plan's own windows."""
-    on        = exports_now(want, sell_kw, in_window)
+    on        = exports_now(want, sell_kw, export_open)
     want_mode = EXPORT_ON_MODE if on else EXPORT_OFF_MODE
     body: dict = {}
     if fw_general.get("limit_control") != want_mode:
         body["limit_control"] = want_mode
     if fw_general.get("solar_sell_enable") is not bool(want):
         body["solar_sell_enable"] = bool(want)
-    if on:
-        target = export_power_w(sell_kw, cap_w)
-        if fw_general.get("max_sell_power_w") != target:
-            body["max_sell_power_w"] = target
+    # The ceiling tracks the plan at all times, not only while selling. Writing
+    # it solely on the way into a window left it stale — whatever value happened
+    # to be there last governed the next export, which is not the plan's call to
+    # miss.
+    target = export_power_w(sell_kw, cap_w)
+    if fw_general.get("max_sell_power_w") != target:
+        body["max_sell_power_w"] = target
     if not body:
         log.debug("export: unchanged (%s)", want_mode); return False
     log.info("export: %s → %s  %s", fw_general.get("limit_control"), want_mode, body)
@@ -723,8 +720,7 @@ def show_map(m: dict, now_min: int, opts: dict) -> None:
     sell_w    = min(int(sell_kw * 1000), opts["inverter_power_w"]) if sell_kw > 0 \
                 else opts["inverter_power_w"]
     soc_lo, soc_hi = soc_envelope(m)
-    desired   = build_desired_slots(tou, now_min, opts, soc_lo, soc_hi, sell_w,
-                                    m.get("events", []))
+    desired   = build_desired_slots(tou, now_min, opts, soc_lo, soc_hi, sell_w)
 
     print(f"\n{_BOLD}Deye TOU slots (24 h partition):{_RST}")
     for i, d in enumerate(desired):
@@ -754,8 +750,7 @@ def show_map(m: dict, now_min: int, opts: dict) -> None:
         print(f"  {_BOLD if is_now else ''}{t}{_RST if is_now else ''}   {'  '.join(parts)}{marker}")
 
     exp_on = exports_now(bool(want.get("export")), sell_kw,
-                         opts["sell_solar_outside_windows"]
-                         or _active_window(tou, now_min) is not None)
+                         _active_window(tou, now_min) is not None)
     exp_w  = export_power_w(sell_kw, opts["max_sell_power_w"]) if exp_on else 0
     print(f"\n{_DIM}now = {_fmt(now_min)}   soc envelope {soc_lo}-{soc_hi}%   "
           f"desired: export={want.get('export','?')} ({exp_w} W)  "
@@ -810,20 +805,26 @@ def main() -> None:
     if soc is not None:
         log.info("soc: %d%%", soc)
 
-    desired = build_desired_slots(tou_slots, now_min, cfg, soc_lo, soc_hi, sell_w,
-                                 m.get("events", []))
+    # Export opens inside a planned battery window, or outside one when the pack
+    # is already full — then the only thing left to sell is surplus solar.
+    in_window = _active_window(tou_slots, now_min) is not None
+    surplus   = (cfg["sell_surplus_when_full"] and not in_window
+                 and bool(want.get("export")) and battery_full(soc, soc_hi))
+    if surplus:
+        log.info("surplus: pack at %d%% (envelope tops at %d%%) — selling solar surplus",
+                 soc, soc_hi)
+    export_open = in_window or surplus
 
-    # Outside a planned window the plant may be configured to keep sell power at
-    # 0 W, which is what leaves the battery free to serve the house.
-    in_window = (cfg["sell_solar_outside_windows"]
-                 or _active_window(tou_slots, now_min) is not None)
+    desired = build_desired_slots(tou_slots, now_min, cfg, soc_lo, soc_hi, sell_w,
+                                  surplus)
 
     # ── Early exit if nothing has changed since last run ──────────────────────
-    # in_window is part of the fingerprint: leaving a window changes what gets
-    # written without necessarily changing the plan's own desired state.
+    # export_open is part of the fingerprint: crossing a window edge, or the
+    # pack filling up, changes what gets written without necessarily changing
+    # the plan's own desired state.
     state       = load_state()
     fingerprint = (f"{_slots_hash(desired)}|{json.dumps(want, sort_keys=True)}"
-                   f"|{int(in_window)}")
+                   f"|{int(export_open)}")
     if (not state.get("pending")
             and state.get("fingerprint") == fingerprint
             and not _soc_guard_would_fire(tou_slots, now_min, soc)):
@@ -858,12 +859,12 @@ def main() -> None:
     # rather than leaving a stale sell power in place.
     exp_hit = apply_export(bool(want.get("export")), fw_general, sell_kw,
                            cfg["max_sell_power_w"], cfg["api_url"], args.dry_run,
-                           in_window)
+                           export_open)
 
     chg_hit = False
     if "charge_amps" in want:
         charge_a = want["charge_amps"]
-        if not in_window:
+        if not export_open:
             full = full_charge_amps(m.get("events", []), charge_a)
             if full > charge_a:
                 log.info("charge_amps: %.0f A → %.0f A — not selling here, so bank the solar",
@@ -880,7 +881,7 @@ def main() -> None:
         if tou_hit: new_pending["tou_slots"]   = desired
         if exp_hit:
             new_pending["export_mode"] = (
-                EXPORT_ON_MODE if exports_now(bool(want.get("export")), sell_kw, in_window)
+                EXPORT_ON_MODE if exports_now(bool(want.get("export")), sell_kw, export_open)
                 else EXPORT_OFF_MODE)
             new_pending["solar_sell"] = bool(want.get("export"))
         if chg_hit: new_pending["charge_amps"] = charge_a
