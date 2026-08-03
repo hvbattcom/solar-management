@@ -14,8 +14,9 @@ solar-management/
 ├── discover.sh            # LAN scan for Solis/Deye inverters + Battery Emulator; writes found.yaml
 ├── deploy.sh               # One-shot install + systemd service setup (uses found.yaml)
 ├── solis/                  # Solis monitor, API, dispatcher, config
-├── deye/                   # Deye monitor, API, config
+├── deye/                   # Deye monitor, API, dispatcher, config
 ├── templates/               # Jinja2/format output templates (human, JSON, Prometheus)
+├── tests/                   # Offline tests (run directly with python3)
 └── requirements.txt         # Shared Python dependencies
 ```
 
@@ -32,8 +33,14 @@ derives the desired inverter state from time-ordered events, and applies only wh
 
 ### `deye/`
 
-Read-only poller (`deye-monitor.py`) and read-write Flask API (`deye-api.py`) for Deye
-hybrid inverters, talking SolarmanV5 to the datalogger. See [deye/README.md](deye/README.md).
+Read-only poller (`deye-monitor.py`), read-write Flask API (`deye-api.py`) and
+**`dispatcher.py`** for Deye hybrid inverters, talking SolarmanV5 to the datalogger.
+
+The Deye dispatcher does the same job as the Solis one from the same brand-neutral map, but
+Deye's TOU is six time *points* tiling the whole day rather than six independently enabled
+windows — so a discharge window costs two registers, export is driven globally off the event
+timeline instead of from the slot budget, and every slot is written with grid charge off to
+keep its SOC field meaning a floor. See [deye/README.md](deye/README.md#dispatcher-dispatcherpy).
 
 ### `templates/`
 

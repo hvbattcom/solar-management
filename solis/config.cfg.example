@@ -44,3 +44,8 @@ selling_enabled = false
 # Bind address and port for solis-api.py (also used by dispatch.py to reach it)
 host = 0.0.0.0
 port = 5000
+
+# Prometheus holding this plant's live metrics. dispatcher.py queries
+# battery_soc_pct from it for the SoC guard; leave empty to run without the
+# guard, in which case the plan is applied without checking the real SoC.
+mothership_prometheus_api =
