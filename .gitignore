@@ -2,3 +2,16 @@
 solis/config.cfg
 deye/config.cfg
 found.yaml
+
+# Dispatcher runtime state (pushed maps, applied-state cache, logs)
+*/maps/
+*/dispatcher_state.json
+*/dispatcher.log*
+*/dispatcher.cron.log
+*/auto_managed.json
+__pycache__/
+*.pyc
+
+# Temporary field-diagnostic artifacts
+*/night_watch.csv
+*/sample_state.sh
