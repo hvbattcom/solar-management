@@ -14,31 +14,31 @@ dispatcher does not put the schedule in the inverter at all:
     slot TIMES are fixed scaffolding, written once and never touched
     slot VALUES are the live control signal, rewritten when intent changes
 
-The plan is executed here, every five minutes, against two orthogonal controls:
+The plan is executed here, every five minutes, against two controls:
 
-    target vs SoC   may the battery be dispatched at all?
-                    below the current level it discharges; above it, it is held
-                    and the house falls back to the grid.
+    work mode (142)   may anything leave the plant at all?  This is the gate,
+                      and the only one — the per-slot sell bit does NOT hold the
+                      battery back, which was established by clearing all six
+                      and watching 24 kW leave the pack at night anyway.
 
-    sell bit        may what it dispatches reach the grid?
+    target vs SoC     what the open gate is allowed to draw from. Below the
+                      current level the battery is dispatched; at or above it
+                      the pack is held and only surplus PV can leave.
 
-Which covers every state the plan asks for:
+Three states, and the unsafe pairing — gate open with a low target outside a
+planned window — is unreachable from all of them:
 
-    carrying the house   target below SoC, sell off
-    banking solar        target above SoC          (surplus charges the pack)
-    selling the battery  target at the plan floor, sell on
+    carrying the house   gate closed, target low   (pack carries the load)
+    selling surplus      gate open,   target ≥ SoC (only PV can leave)
+    selling the battery  gate open,   target = the window's floor
 
 Windows therefore cost nothing. Twelve of them are the same as two, resolved at
 5-minute granularity, and a window landing next to a slot boundary — which used
 to be a real hazard — no longer means anything.
 
 All six slots are written with identical values, so crossing a boundary between
-runs is a no-op. Within the block the firmware sees SOC (166-171) before the
-control bits (172-177), which is the safe order: the target is always in place
-before selling is enabled, and never lowered while selling is still on.
-
-Register 142 (work mode) is pinned to Selling First and left alone; selling is
-gated by the sell bit, not by the mode.
+runs is a no-op. The write is read back and confirmed before the gate is opened:
+a half-applied block once left two slots selling with nothing logged.
 
 Crontab:  */5 * * * *  /usr/bin/python3 /path/to/dispatcher.py
 
@@ -72,7 +72,14 @@ DAY_MIN             = 1440
 # because the hardware insists on six of them.
 SCAFFOLD_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"]
 
-WORK_MODE = "Selling First"
+# Export is gated by the WORK MODE, and only by it. The per-slot sell bit was
+# tested directly on 2026-08-03: all six cleared, mode left on Selling First and
+# a target below SoC, and the plant exported 24 kW off the battery at night with
+# PV at zero. Setting the mode to Zero Export to CT stopped it within seconds.
+# The bit is still written to match intent so the app reads coherently, but
+# nothing may depend on it.
+MODE_EXPORT = "Selling First"
+MODE_CLOSED = "Zero Export to CT"
 
 # Surplus is measured, not inferred from the clock: a cloudy afternoon needs the
 # battery on the house exactly as much as midnight does.
@@ -267,7 +274,19 @@ def hold_pack(live: dict, previous: bool | None) -> bool:
 
 
 def decide(m: dict, now_min: int, live: dict, opts: dict, previous_hold: bool | None) -> dict:
-    """Everything the inverter should be doing at this moment."""
+    """Everything the inverter should be doing at this moment.
+
+    Three states, and the unsafe combination — export open while the target sits
+    below SoC outside a planned window — cannot be reached from any of them:
+
+      SELL BATTERY   in a window, price good: mode open, target at the plan's
+                     floor, so the pack drains to it and no further.
+      SELL SURPLUS   price good and there is surplus to sell: mode open, but the
+                     target is held at or above SoC, so the battery cannot be
+                     the source and only PV leaves.
+      HOUSE          everything else: mode closed, target low, pack free to
+                     carry the load with nothing able to reach the grid.
+    """
     events   = m.get("events", [])
     want     = desired_state(events, now_min)
     price_ok = bool(want.get("export"))
@@ -280,26 +299,30 @@ def decide(m: dict, now_min: int, live: dict, opts: dict, previous_hold: bool | 
         ceiling = min(ceiling, opts["max_sell_power_w"])
 
     charge_a = want.get("charge_amps")
+    base = {"ceiling": ceiling, "solar_sell": price_ok, "charge_a": charge_a}
 
     if win and price_ok:
-        # Selling the battery: drain to the plan's floor for this window.
-        floor  = max(lo, min(hi, int(win["soc_floor_pct"])))
-        guard  = live["soc"] <= floor + SOC_GUARD_MARGIN
-        if guard:
-            log.warning("soc guard: %d%% is within %d%% of the floor %d%% — not selling",
+        floor = max(lo, min(hi, int(win["soc_floor_pct"])))
+        if live["soc"] <= floor + SOC_GUARD_MARGIN:
+            log.warning("soc guard: %d%% is within %d%% of the floor %d%% — closing export",
                         live["soc"], SOC_GUARD_MARGIN, floor)
-        return {"target": floor, "sell": not guard, "hold": False,
-                "ceiling": ceiling, "solar_sell": price_ok,
-                "charge_a": charge_a, "reason": "window" if not guard else "window (guarded)"}
+            return {**base, "mode_on": False, "target": lo, "sell": False,
+                    "hold": False, "reason": "window (guarded at the floor)"}
+        return {**base, "mode_on": True, "target": floor, "sell": True,
+                "hold": False, "reason": "window: selling the battery"}
 
-    # Outside a window the battery is never sold. Whether it is held or put on
-    # the house is decided by the live power balance, not the clock.
     hold = hold_pack(live, previous_hold)
+    if price_ok and hold:
+        # Worth selling and there is surplus to sell. The target is pinned at or
+        # above where the pack already sits, so opening the mode cannot drain it.
+        target = max(hi, min(100, live["soc"]))
+        return {**base, "mode_on": True, "target": target, "sell": False,
+                "hold": True, "reason": "selling solar surplus"}
+
     if charge_a is not None and not hold:
         charge_a = max(charge_a, full_charge_amps(events, charge_a))
-    return {"target": hi if hold else lo, "sell": False, "hold": hold,
-            "ceiling": ceiling, "solar_sell": price_ok,
-            "charge_a": charge_a,
+    return {**base, "charge_a": charge_a, "mode_on": False,
+            "target": hi if hold else lo, "sell": False, "hold": hold,
             "reason": "banking surplus" if hold else "carrying the house"}
 
 
@@ -318,38 +341,69 @@ def resolve_battery_count(opts: dict, fw_battery: dict | None) -> int:
     return 2 if (fw_battery or {}).get("bat2_max_charge_a") else 1
 
 
-def sync_slots(plan: dict, fw_tou: dict, opts: dict, api_url: str, dry_run: bool) -> bool:
-    """Write the same values into all six slots, plus the fixed times.
+def slots_match(plan: dict, fw_tou: dict, opts: dict) -> bool:
+    fw = {s["slot"]: s for s in fw_tou.get("slots", [])}
+    for w in desired_slots(plan, opts):
+        f = fw.get(w["slot"], {})
+        if (f.get("time") != w["time"] or f.get("soc_pct") != w["soc_pct"]
+                or bool(f.get("sell")) != w["sell"]
+                or bool(f.get("grid_charge")) or bool(f.get("gen_charge"))
+                or round(f.get("power_w", -1)) != round(w["power_w"])):
+            return False
+    return True
 
-    Identical slots mean a boundary crossing between runs changes nothing, so
-    the dispatcher's 5-minute cadence is the only granularity that matters."""
-    fw   = {s["slot"]: s for s in fw_tou.get("slots", [])}
-    want = [{"slot": n + 1, "time": SCAFFOLD_TIMES[n],
+
+def desired_slots(plan: dict, opts: dict) -> list:
+    return [{"slot": n + 1, "time": SCAFFOLD_TIMES[n],
              "power_w": opts["inverter_power_w"],
              "soc_pct": plan["target"], "sell": plan["sell"],
              "grid_charge": False, "gen_charge": False}
             for n in range(TOU_SLOT_COUNT)]
 
-    def differs(w):
-        f = fw.get(w["slot"], {})
-        return (f.get("time") != w["time"] or f.get("soc_pct") != w["soc_pct"]
-                or bool(f.get("sell")) != w["sell"]
-                or bool(f.get("grid_charge")) or bool(f.get("gen_charge"))
-                or round(f.get("power_w", -1)) != round(w["power_w"]))
 
-    if not any(differs(w) for w in want):
+def sync_slots(plan: dict, fw_tou: dict, opts: dict, api_url: str,
+               dry_run: bool, attempts: int = 2) -> tuple[bool, bool]:
+    """Write all six slots identically, then read back and confirm.
+
+    Verification is not optional. A write of this block goes out one register at
+    a time, and a run that stopped half way through once left two slots still
+    selling with nothing logged — the live slot kept the stale value and the
+    plant exported for a further fifteen minutes. Since every slot is supposed
+    to be identical, a partial write breaks the very invariant the design rests
+    on, so the caller is told whether the schedule is trustworthy."""
+    if slots_match(plan, fw_tou, opts):
         log.debug("slots: up to date (target %d%%, sell %s)", plan["target"], plan["sell"])
-        return False
+        return False, True
+
+    want = desired_slots(plan, opts)
     log.info("slots → target %d%%  sell %s  (%s)", plan["target"], plan["sell"], plan["reason"])
-    _post(api_url, "/api/settings/tou/all", want, dry_run)
+    for attempt in range(1, attempts + 1):
+        _post(api_url, "/api/settings/tou/all", want, dry_run)
+        if dry_run:
+            return True, True
+        fresh = _get(api_url, "/api/settings").get("tou") or {}
+        if slots_match(plan, fresh, opts):
+            return True, True
+        log.warning("slots did not verify (attempt %d/%d) — rewriting", attempt, attempts)
+    log.error("slots still do not match after %d attempts", attempts)
+    return True, False
+
+
+def sync_mode(mode_on: bool, fw_general: dict, api_url: str, dry_run: bool) -> bool:
+    """The export gate. Written on its own so the caller controls the ordering:
+    closed before the schedule changes, opened only after it has verified."""
+    want = MODE_EXPORT if mode_on else MODE_CLOSED
+    if fw_general.get("limit_control") == want:
+        return False
+    log.info("mode → %s", want)
+    _post(api_url, "/api/settings/general", {"limit_control": want}, dry_run)
     return True
 
 
 def sync_general(plan: dict, fw_general: dict, api_url: str, dry_run: bool) -> bool:
+    """Solar-sell follows the plan's price signal; the ceiling follows its
+    sell power. Neither can export anything on its own — that is the mode."""
     body = {}
-    if fw_general.get("limit_control") != WORK_MODE:
-        # Pinned, not toggled: selling is gated by the sell bit.
-        body["limit_control"] = WORK_MODE
     if fw_general.get("solar_sell_enable") is not plan["solar_sell"]:
         body["solar_sell_enable"] = plan["solar_sell"]
     if fw_general.get("max_sell_power_w") != plan["ceiling"]:
@@ -467,12 +521,24 @@ def main() -> None:
     fw_battery = fw.get("battery")
     n_bat      = resolve_battery_count(cfg, fw_battery)
 
-    hits = [
-        ensure_tou_enabled(fw_tou, cfg["api_url"], args.dry_run),
-        sync_slots(plan, fw_tou, cfg, cfg["api_url"], args.dry_run),
-        sync_general(plan, fw_general, cfg["api_url"], args.dry_run),
-        sync_battery(plan, fw_battery, n_bat, cfg, cfg["api_url"], args.dry_run),
-    ]
+    # Closing comes first and opening comes last, so the gate is never open
+    # over a schedule that has not been confirmed.
+    hits = [ensure_tou_enabled(fw_tou, cfg["api_url"], args.dry_run)]
+    if not plan["mode_on"]:
+        hits.append(sync_mode(False, fw_general, cfg["api_url"], args.dry_run))
+
+    wrote, verified = sync_slots(plan, fw_tou, cfg, cfg["api_url"], args.dry_run)
+    hits.append(wrote)
+    hits.append(sync_general(plan, fw_general, cfg["api_url"], args.dry_run))
+    hits.append(sync_battery(plan, fw_battery, n_bat, cfg, cfg["api_url"], args.dry_run))
+
+    if plan["mode_on"]:
+        if verified:
+            hits.append(sync_mode(True, fw_general, cfg["api_url"], args.dry_run))
+        else:
+            log.error("refusing to open export over a schedule that did not verify")
+            hits.append(sync_mode(False, fw_general, cfg["api_url"], args.dry_run))
+
     if not any(hits):
         log.info("all up to date")
 

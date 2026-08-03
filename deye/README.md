@@ -180,25 +180,30 @@ next to a boundary — previously a real hazard — no longer means anything.
 
 ### The two controls
 
-A slot's SOC is a **target the inverter drives toward**, not a floor it refuses
-to cross. Combined with the per-slot sell bit that gives two orthogonal controls:
+Export is gated by the **work mode (142)**, and only by it. The per-slot sell bit
+does *not* hold the battery back: with all six cleared, the mode left open and a
+target below SoC, the plant exported 24 kW off the pack at night with PV at zero.
+The bit is still written to match intent so the app reads coherently, but nothing
+depends on it.
 
 | Control | Question |
 |---|---|
-| target vs SoC | may the battery be **dispatched** at all? |
-| sell bit | may what it dispatches reach the **grid**? |
+| work mode (142) | may anything leave the plant at all? |
+| target vs SoC | what an open gate may draw from — below the current level the battery is dispatched, at or above it only surplus PV can leave |
 
-Which covers every state the plan asks for:
+Three states, and the unsafe pairing (gate open with a low target outside a
+planned window) is unreachable from all of them:
 
-| Intent | target | sell bit |
+| Intent | mode | target |
 |---|---|---|
-| Carrying the house | below SoC (`batt_min`) | off |
-| Banking solar | above SoC (`batt_soft_max`) | off |
-| Selling the battery | the window's floor | on |
+| Carrying the house | closed | `batt_min` |
+| Selling solar surplus | open | at or above SoC |
+| Selling the battery | open | the window's floor |
 
-Register 142 (work mode) is pinned to **Selling First** and never written —
-selling is gated by the sell bit. Register 145 (solar sell) follows the plan's
-price signal directly, and 143 carries the sell ceiling.
+Ordering matters and is enforced: closing writes the gate **first**, opening
+writes it **last**, after the slot block has been read back and confirmed. A
+half-applied block once left two slots selling with nothing logged, and the
+plant exported for a further fifteen minutes.
 
 Every slot is written with grid charge **off**: a set grid-charge bit flips that
 slot's SOC from "discharge down to" into "charge up to".
