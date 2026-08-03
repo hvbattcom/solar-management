@@ -227,7 +227,7 @@ with _tf.TemporaryDirectory() as tmp:
     new = d._MAPS_DIR / "map_2026-08-04_X.json"
     new.write_text(_json.dumps({"generated_at": "2026-08-04T00:24:48"}))
     skew, stamp = d.newest_map_skew(_dt(2026, 8, 3, 21, 34))
-    assert round(skew) == 170, skew
+    assert 170 <= skew <= 171, skew
     assert stamp == "2026-08-04T00:24:48", "must measure the newest map, not the selected one"
     assert skew > d.CLOCK_SKEW_LIMIT_MIN, "and that must trip the guard"
     # The stale map alone would have hidden it entirely.
