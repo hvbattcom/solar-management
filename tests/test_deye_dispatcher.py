@@ -204,4 +204,33 @@ assert d.sync_general(dict(plan, ceiling=27000, solar_sell=False), gen_ok, "http
 assert posted[-1][1] == {"solar_sell_enable": False}
 assert all("limit_control" not in b for _, b in posted), "the gate is sync_mode's alone"
 
+# ── 12. Clock skew is caught against the NEWEST map ─────────────────────────
+# The map's times are the planner's local time. A host in a different timezone
+# runs every window at the wrong hour: a UTC plant executed a 21:00 window at
+# 00:24 local and would have sold for three more hours.
+import json as _json, os as _os, pathlib as _pl, tempfile as _tf
+from datetime import datetime as _dt
+
+assert d.clock_skew_min({"generated_at": "2026-08-04T00:24:00"},
+                        _dt(2026, 8, 3, 21, 24)) == 180
+assert abs(d.clock_skew_min({"generated_at": "2026-08-04T00:24:00"},
+                            _dt(2026, 8, 4, 0, 26))) <= 2, "aligned clocks pass"
+assert d.clock_skew_min({}, _dt.now()) is None
+assert d.clock_skew_min({"generated_at": "not a date"}, _dt.now()) is None
+
+with _tf.TemporaryDirectory() as tmp:
+    d._MAPS_DIR = _pl.Path(tmp)
+    # Yesterday's map, written first, is the one a behind-the-planner host picks.
+    old = d._MAPS_DIR / "map_2026-08-03_X.json"
+    old.write_text(_json.dumps({"generated_at": "2026-08-03T19:59:00"}))
+    _os.utime(old, (1, 1))
+    new = d._MAPS_DIR / "map_2026-08-04_X.json"
+    new.write_text(_json.dumps({"generated_at": "2026-08-04T00:24:48"}))
+    skew, stamp = d.newest_map_skew(_dt(2026, 8, 3, 21, 34))
+    assert round(skew) == 170, skew
+    assert stamp == "2026-08-04T00:24:48", "must measure the newest map, not the selected one"
+    assert skew > d.CLOCK_SKEW_LIMIT_MIN, "and that must trip the guard"
+    # The stale map alone would have hidden it entirely.
+    assert d.clock_skew_min(_json.loads(old.read_text()), _dt(2026, 8, 3, 21, 34)) < 0
+
 print("all deye dispatcher tests passed")

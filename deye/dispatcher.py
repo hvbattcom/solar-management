@@ -16,10 +16,8 @@ dispatcher does not put the schedule in the inverter at all:
 
 The plan is executed here, every five minutes, against two controls:
 
-    work mode (142)   may anything leave the plant at all?  This is the gate,
-                      and the only one — the per-slot sell bit does NOT hold the
-                      battery back, which was established by clearing all six
-                      and watching 24 kW leave the pack at night anyway.
+    the two gates     work mode (142) and the per-slot sell bit, ORed: power
+                      leaves if either is open, so both are closed together.
 
     target vs SoC     what the open gate is allowed to draw from. Below the
                       current level the battery is dispatched; at or above it
@@ -72,12 +70,14 @@ DAY_MIN             = 1440
 # because the hardware insists on six of them.
 SCAFFOLD_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"]
 
-# Export is gated by the WORK MODE, and only by it. The per-slot sell bit was
-# tested directly on 2026-08-03: all six cleared, mode left on Selling First and
-# a target below SoC, and the plant exported 24 kW off the battery at night with
-# PV at zero. Setting the mode to Zero Export to CT stopped it within seconds.
-# The bit is still written to match intent so the app reads coherently, but
-# nothing may depend on it.
+# Export has TWO gates and they are an OR: it flows if the work mode is open or
+# if the live slot's sell bit is set. Measured on 2026-08-03, all three cases:
+#   all bits cleared, mode open      -> exported 24 kW off the pack at night
+#   bits set, mode Zero Export to CT -> exported 23 kW
+#   both closed                      -> stopped within seconds
+# So neither alone is sufficient to stop it, and both are driven together. All
+# six slots carry the same bit: setting only the live one would leave a boundary
+# crossing to flip selling on or off for up to a whole dispatcher interval.
 MODE_EXPORT = "Selling First"
 MODE_CLOSED = "Zero Export to CT"
 
@@ -91,6 +91,13 @@ MODE_CLOSED = "Zero Export to CT"
 # five minutes would thrash both the registers and the house supply.
 HOLD_ABOVE_W    = 300    # comfortably in surplus  → hold the pack
 RELEASE_BELOW_W = 0      # drawing from the grid   → release it to the house
+
+# The map's times are the PLANNER's local time, and the dispatcher compares them
+# against its own clock. A host on a different timezone therefore executes the
+# whole plan by that offset — a UTC plant ran a 21:00 window at 00:24 local and
+# would have kept selling for three more hours. `generated_at` is the planner's
+# local timestamp, so comparing it to our clock catches the skew directly.
+CLOCK_SKEW_LIMIT_MIN = 90
 
 SOC_GUARD_MARGIN = 2     # stop a drain this far above the plan's floor
 SOC_MIN_FALLBACK = 20    # only for a map with no envelope at all
@@ -169,6 +176,36 @@ def soc_envelope(m: dict) -> tuple[int, int]:
     hi = m.get("soc_max_pct") or 100
     lo, hi = int(lo), int(hi)
     return (max(0, min(lo, hi)), min(100, max(lo, hi)))
+
+
+def clock_skew_min(m: dict, now: datetime) -> float | None:
+    """Minutes our clock is behind the planner's, from a map's own timestamp.
+
+    Negative means we are ahead. None when the map carries no usable stamp."""
+    stamp = m.get("generated_at")
+    if not stamp:
+        return None
+    try:
+        return (datetime.fromisoformat(stamp) - now).total_seconds() / 60.0
+    except ValueError:
+        return None
+
+
+def newest_map_skew(now: datetime) -> tuple[float | None, str]:
+    """Skew measured against the most recently pushed map, whichever day it is for.
+
+    Deliberately not the map being dispatched: a host behind the planner selects
+    by its own date, so once the planner has rolled past midnight it keeps
+    picking yesterday's map — whose timestamp is comfortably in the past and
+    hides the very skew that made the selection wrong."""
+    newest = max(_MAPS_DIR.glob("map_*.json"), key=lambda p: p.stat().st_mtime, default=None)
+    if newest is None:
+        return None, ""
+    try:
+        data = json.loads(newest.read_text())
+    except Exception:
+        return None, newest.name
+    return clock_skew_min(data, now), data.get("generated_at", "")
 
 
 def desired_state(events: list, now_min: int) -> dict:
@@ -496,6 +533,17 @@ def main() -> None:
     if not args.time and m.get("date") == (date.today() - timedelta(days=1)).isoformat():
         now_min += DAY_MIN
         log.info("serving previous day's map (%s) — now shifted to %s", m["date"], _fmt(now_min))
+
+    # A map cannot have been generated in the future. If it looks that way our
+    # clock is behind the planner's, and every window would fire at the wrong
+    # hour — so refuse rather than execute the plan at the wrong time of day.
+    skew, stamp = newest_map_skew(_now)
+    if skew is not None and skew > CLOCK_SKEW_LIMIT_MIN:
+        log.error("clock skew: newest map generated %s but this host reads %s "
+                  "(%.0f min behind). The plan's times are the planner's local time, so "
+                  "every window would fire at the wrong hour — fix this host's timezone. "
+                  "Refusing to dispatch.", stamp, _now.isoformat(timespec="seconds"), skew)
+        sys.exit(1)
 
     state = load_state()
     try:
