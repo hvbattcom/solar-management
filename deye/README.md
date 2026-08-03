@@ -160,86 +160,97 @@ python3 dispatcher.py --instance GS48        # pick a specific plant's map
 
 ### How the plan maps onto Deye's Time of Use
 
-The map is brand-neutral: a list of battery **discharge windows** plus a timeline of
-**events** (export on/off, battery charge current). Solis and Deye reach that state very
-differently.
+The map is brand-neutral: battery **discharge windows** plus a timeline of
+**events** (export on/off, charge current). Solis can hold that as a schedule; Deye
+cannot, so this dispatcher does not try.
 
-|  | Solis | Deye |
+Deye has 6 TOU time **points** tiling the day, with no per-slot enable. Encoding
+windows as boundaries costs two registers each, caps the day at roughly three
+windows, and makes every window edge a rewrite. Instead:
+
+| | |
+|---|---|
+| slot **times** | fixed scaffolding — written once, never touched |
+| slot **values** | the live control signal, rewritten when intent changes |
+
+All six slots always carry **identical** values, so crossing a boundary between
+runs is a no-op and the dispatcher's 5-minute cadence is the only granularity
+that matters. Windows cost nothing: twelve are the same as two, and one landing
+next to a boundary — previously a real hazard — no longer means anything.
+
+### The two controls
+
+A slot's SOC is a **target the inverter drives toward**, not a floor it refuses
+to cross. Combined with the per-slot sell bit that gives two orthogonal controls:
+
+| Control | Question |
+|---|---|
+| target vs SoC | may the battery be **dispatched** at all? |
+| sell bit | may what it dispatches reach the **grid**? |
+
+Which covers every state the plan asks for:
+
+| Intent | target | sell bit |
 |---|---|---|
-| Slot model | 6 discharge windows, each with its own start **and** end | 6 time **points** — slot N runs until slot N+1's time, slot 6 wraps past midnight to slot 1 |
-| Coverage | time outside an enabled window is plain self-use | the six slots always tile the full 24 h |
-| Per-slot enable | bit in the TOU switch register (43707) | none — only a global schedule switch (register 146) |
-| Discharge limit | per-slot current (A) | per-slot power (W) |
-| Slot SOC field | discharge floor — a limit | **a target the inverter drives toward** |
-| Export control | `allow_export` bit — a permission | work mode — a command to export, sourcing from the battery |
+| Carrying the house | below SoC (`batt_min`) | off |
+| Banking solar | above SoC (`batt_soft_max`) | off |
+| Selling the battery | the window's floor | on |
 
-Three consequences shape the implementation, and the last two were learned the hard way:
+Register 142 (work mode) is pinned to **Selling First** and never written —
+selling is gated by the sell bit. Register 145 (solar sell) follows the plan's
+price signal directly, and 143 carries the sell ceiling.
 
-**A window costs two registers, not one.** Turning selling on and back off both need a
-boundary, so six registers hold roughly **three** windows where Solis holds six. Overflow is
-handled the same way as Solis: windows already finished are dropped first, then the latest
-windows are deferred and slide in on a later run as earlier ones end. Unused boundaries are
-padded by splitting the widest segment at its midpoint, which inherits that segment's
-settings and so changes no behaviour.
+Every slot is written with grid charge **off**: a set grid-charge bit flips that
+slot's SOC from "discharge down to" into "charge up to".
 
-**A slot's SOC is a target, not a floor.** Set it below where the battery currently sits and
-the inverter works to get there — with the work mode selling, that means exporting the pack
-to the grid. So every slot carries a deliberate value: the plan's floor inside a selling
-window, and the battery minimum elsewhere, where the pack is free to carry the house.
+### Hold or release, outside a window
 
-**Export is switched with the work mode.** Deye has no equivalent of Solis's `allow_export`
-permission: "Selling First" is an instruction to export up to `max_sell_power_w`, taking from
-PV *and the battery*. It is safe only while the live slot targets at or above the battery's
-current level.
+Whether the pack is held for banking or released to the house is decided from
+the **live power balance**, not the clock — a cloudy afternoon needs the battery
+on the house exactly as much as midnight does:
 
-It opens inside a planned window, and outside one only while the pack is **full** — at its
-target there is nothing below the target left to drain, so the only thing that can leave is
-genuine surplus solar. That is how "sell the PV but not the battery", which Deye has no way
-to express, gets expressed anyway. `sell_surplus_when_full = false` declines it entirely.
+```
+surplus = -(battery + grid)      what is charging the pack plus what is leaving
+```
 
-> `max_sell_power_w` cannot serve as the on/off control. The register accepts 0 and holds it
-> under Zero Export to CT, but once the mode is Selling First the plant's configured limit
-> returns on its own within minutes and export resumes at full power. It is a ceiling only.
-
-**Every slot is written with grid charge off.** The planner has no grid-charging concept, and
-a set grid-charge bit flips that slot's SOC from "discharge down to" into "charge up to".
+Held above +300 W of surplus, released once the house draws from the grid, and
+between the two the previous answer stands so it cannot flap. All of it read
+from the inverter itself; there is no Prometheus dependency.
 
 ### What it writes
 
 | Plan input | Deye setting | Register |
 |---|---|---|
-| discharge windows | TOU time / power / SOC / control | 148–153, 154–159, 166–171, 172–177 |
-| (schedule must be live) | TOU enable + all weekdays | 146 |
-| `export: true/false`, inside a window | work mode; sell ceiling; solar sell held on | 142, 143, 145 |
+| in/out of a discharge window | slot SOC target ×6, sell bit ×6 | 166–171, 172–177 |
+| (scaffolding, written once) | slot times ×6 | 148–153 |
+| (pinned, never toggled) | work mode = Selling First | 142 |
+| `export: true/false` | solar sell | 145 |
+| `sell_kw` | sell ceiling | 143 |
 | `charge_amps` | max battery charge current, split across batteries | 108, 243 |
+| (must be on) | TOU enable + all weekdays | 146 |
 
-Writes go through `deye-api.py` with an `X-Dispatcher: 1` header, which is what gets them
-past the auto-management guard that blocks manual writes while the plan is in charge. Only
-registers whose value actually differs are written, so a steady day costs no EEPROM cycles.
+Writes go through `deye-api.py` with an `X-Dispatcher: 1` header, which gets them past the
+auto-management guard that blocks manual writes while the plan is in charge.
 
 ### Safety
 
-- **SoC guard** — if the battery reaches its floor + 2 % inside a live selling window, that
-  slot's floor is raised to the measured SoC and its sell bit cleared, halting the drain
-  without disturbing the rest of the schedule. Deye enforces the floor itself, so this is a
-  backstop rather than the primary mechanism. It needs `mothership_prometheus_api` set;
-  without it the plan is applied blind.
-- **Write verification** — every write is re-read on the next run and retried if the
-  firmware did not take it.
+- **SoC guard** — inside a window, if the pack is within 2 % of the plan's floor the sell bit
+  is withheld. Deye stops at the target on its own, so this is a backstop.
+- **Only what changed is written** — the API diffs the 30-register TOU block and writes just
+  the differing registers, so a settled day costs no EEPROM cycles.
 - **Auto-management** — while enabled (`/api/auto-managed`), manual writes through the UI
   and API are refused so they cannot fight the dispatcher.
 
 ### Configuration
 
 The dispatcher reads the `[DeyeAPI]` section of `config.cfg`: `port`,
-`mothership_prometheus_api`, `battery_count`, `max_charge_amps`, `max_sell_power_w`,
-`sell_surplus_when_full` and `write_sell_bit`. See `config.cfg.example` for what each does.
+`battery_count`, `max_charge_amps` and `max_sell_power_w`. See `config.cfg.example`.
 
 The battery's SoC envelope is *not* among them: `soc_min_pct` / `soc_max_pct` come from the
 map, since they are the same `batt_min` / `batt_soft_max_soc` the plan was built against and
 a local copy could only drift out of agreement with it.
 
-Three of those are worth setting deliberately per plant:
+Two of those are worth setting deliberately per plant:
 
 - **`max_charge_amps`** — the plan's `charge_amps` is a planner-side figure (it comes from
   `tou_discharge_amps`) that knows nothing about the pack's rating, so a plant whose battery
@@ -247,10 +258,4 @@ Three of those are worth setting deliberately per plant:
 - **`battery_count`** — `auto` asks the inverter, treating 0 A limits on the second battery
   as "not installed". Getting this wrong is not cosmetic: assuming two batteries on a
   single-battery plant halves the charge current all day.
-- **`sell_surplus_when_full`** — on by default. Only the *live* slot is pinned to the top of
-  the envelope, and only while the pack is full, so the battery is never locked out of
-  carrying the house at other times. Turn it off to never export outside a planned window.
 
-Set `write_sell_bit = false` if your firmware has no per-slot Sell column — selling is then
-governed solely by the work-mode register, which the dispatcher drives from the plan's export
-events either way.

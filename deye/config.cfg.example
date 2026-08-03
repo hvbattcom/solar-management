@@ -26,40 +26,16 @@ selling_enabled = false
 host = 0.0.0.0
 port = 5000
 
-# Prometheus that holds this plant's live metrics. dispatcher.py queries
-# battery_soc_pct from it for the SoC guard; leave empty to run without the
-# guard (the plan is then applied blind).
-mothership_prometheus_api = http://mothership:9090
-
 # How many batteries the plan's charge_amps figure is split across. "auto" asks
 # the inverter (an absent second battery reports 0 A limits); override with an
 # integer if that detection is wrong for your wiring.
 battery_count = auto
 
 # Per-battery ceiling, in amps, on the charge current the dispatcher writes.
-# The plan's charge_amps is a planner-side figure that knows nothing about this
-# pack's rating, so set this to what the battery actually accepts. 0 = no cap.
+# The plan's charge_amps knows nothing about this pack's rating. 0 = no cap.
 max_charge_amps = 0
 
 # Ceiling, in watts, on the export power the dispatcher writes. Set this to the
 # plant's grid export limit where one applies -- the plan's sell_kw knows
 # nothing about the connection agreement. 0 = no cap.
 max_sell_power_w = 0
-
-# Whether to sell surplus solar outside the plan's battery-discharge windows.
-#
-# Deye cannot express "sell the PV but not the battery": one work mode governs
-# both, against a slot SOC that is a target rather than a floor. But a pack
-# already AT its target has nothing below the target to drain, so opening the
-# mode there can only move genuine surplus. That is the one safe state, and it
-# is what this enables -- export outside a window only while the battery is
-# full, with the live slot pinned to the top of the envelope meanwhile.
-#
-# Turn it off to never export outside a planned window at all.
-sell_surplus_when_full = true
-
-# Write bit 5 ("sell") of each TOU slot's control register (172-177).
-# Set false if your firmware does not expose a per-slot Sell column -- selling
-# is then governed solely by the work-mode register the dispatcher already
-# drives from the plan's export events.
-write_sell_bit = true
