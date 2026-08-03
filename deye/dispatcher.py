@@ -104,6 +104,12 @@ EXPORT_OFF_MODE = "Zero Export to CT"
 # rewrite the whole block on every run — exactly the EEPROM churn to avoid.
 TOU_TIME_GRID_MIN = 5
 
+# The SoC envelope belongs to the planner and arrives in the map. These apply
+# only to a map that carries neither the envelope nor segments to infer it from,
+# which means the planner is out of date; the low one is deliberately cautious.
+SOC_MIN_LAST_RESORT = 20
+SOC_MAX_DEFAULT     = 100
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -162,8 +168,6 @@ def load_config(path: Path) -> dict:
         "max_charge_amps": int(srv.get("max_charge_amps", 0)),
         "max_sell_power_w": int(srv.get("max_sell_power_w", 0)),
         "inverter_power_w": int(float(inv.get("inverter_power_kw", 30)) * 1000),
-        "idle_floor_pct":  int(srv.get("idle_floor_pct", 10)),
-        "soc_max_pct":     int(srv.get("soc_max_pct", 100)),
         "sell_solar_outside_windows":
             srv.get("sell_solar_outside_windows", "false").strip().lower() == "true",
         "write_sell_bit":  srv.get("write_sell_bit", "true").strip().lower() == "true",
@@ -213,19 +217,28 @@ def desired_state(events: list, now_min: int) -> dict:
     return state
 
 
-def soc_envelope(m: dict, opts: dict) -> tuple[int, int]:
-    """The battery's operating range, straight from the planner where possible.
+def soc_envelope(m: dict) -> tuple[int, int]:
+    """The battery's operating range, from the map.
 
     Deye slots hold a TARGET the inverter drives the battery toward, so every
     slot must carry a value inside this range — there is no "leave it alone".
-    Newer maps publish the range explicitly; older ones only imply the low end
-    through their non-selling segments."""
+    This is the planner's call, never local config: it is the same batt_min and
+    batt_soft_max_soc the plan was built against, and a local copy could only
+    ever drift out of agreement with it.
+
+    Maps predating soc_min_pct still imply the low end through their
+    non-selling segments, so that is read rather than guessed."""
     lo = m.get("soc_min_pct")
     if lo is None:
         floors = [s["soc_floor_pct"] for s in m.get("segments", [])
                   if s.get("action") != "sell_batt" and "soc_floor_pct" in s]
-        lo = min(floors) if floors else opts["idle_floor_pct"]
-    hi = m.get("soc_max_pct") or opts["soc_max_pct"]
+        if floors:
+            lo = min(floors)
+        else:
+            lo = SOC_MIN_LAST_RESORT
+            log.warning("map carries no SoC envelope and no segments — "
+                        "falling back to %d%%; is the planner up to date?", lo)
+    hi = m.get("soc_max_pct") or SOC_MAX_DEFAULT
     lo, hi = int(lo), int(hi)
     if lo > hi:
         log.warning("soc envelope inverted (%d-%d) — using %d-%d", lo, hi, hi, lo)
@@ -709,7 +722,7 @@ def show_map(m: dict, now_min: int, opts: dict) -> None:
     sell_kw   = float(m.get("sell_kw", 0))
     sell_w    = min(int(sell_kw * 1000), opts["inverter_power_w"]) if sell_kw > 0 \
                 else opts["inverter_power_w"]
-    soc_lo, soc_hi = soc_envelope(m, opts)
+    soc_lo, soc_hi = soc_envelope(m)
     desired   = build_desired_slots(tou, now_min, opts, soc_lo, soc_hi, sell_w,
                                     m.get("events", []))
 
@@ -787,7 +800,7 @@ def main() -> None:
     instance_id = m.get("instance_id", "")
     sell_w      = (min(int(sell_kw * 1000), cfg["inverter_power_w"]) if sell_kw > 0
                    else cfg["inverter_power_w"])
-    soc_lo, soc_hi = soc_envelope(m, cfg)
+    soc_lo, soc_hi = soc_envelope(m)
 
     want = desired_state(m.get("events", []), now_min)
     if want:
