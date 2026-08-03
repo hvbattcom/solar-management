@@ -8,7 +8,8 @@ inverter_port = 8899
 # Serial number of the SOLARMAN datalogger (found on device label)
 inverter_sn = 1234567890
 
-# Inverter rated output power in kilowatts (used for load % calculations)
+# Inverter rated output power in kilowatts (used for load % calculations, and by
+# dispatcher.py as the discharge-power ceiling written into non-selling TOU slots)
 inverter_power_kw = 30.0
 
 # Enable verbose logging for debugging (true/false)
@@ -19,3 +20,60 @@ verbose = false
 # panel visibility off of (e.g. hide price panels on self-consumption-only
 # sites). Has no effect on inverter communication.
 selling_enabled = false
+
+[DeyeAPI]
+# Bind address and port for deye-api.py (also used by dispatcher.py to reach it)
+host = 0.0.0.0
+port = 5000
+
+# Prometheus that holds this plant's live metrics. dispatcher.py queries
+# battery_soc_pct from it for the SoC guard; leave empty to run without the
+# guard (the plan is then applied blind).
+mothership_prometheus_api = http://mothership:9090
+
+# How many batteries the plan's charge_amps figure is split across. "auto" asks
+# the inverter (an absent second battery reports 0 A limits); override with an
+# integer if that detection is wrong for your wiring.
+battery_count = auto
+
+# Per-battery ceiling, in amps, on the charge current the dispatcher writes.
+# The plan's charge_amps is a planner-side figure that knows nothing about this
+# pack's rating, so set this to what the battery actually accepts. 0 = no cap.
+max_charge_amps = 0
+
+# Ceiling, in watts, on the export power the dispatcher writes. Set this to the
+# plant's grid export limit where one applies -- the plan's sell_kw knows
+# nothing about the connection agreement. 0 = no cap.
+max_sell_power_w = 0
+
+# SOC floor written into TOU slots that are NOT selling windows, used only as a
+# fallback: the pushed map's own soc_min_pct normally supplies it.
+idle_floor_pct = 10
+
+# Upper end of the battery's SOC envelope, again only a fallback for maps that
+# predate soc_max_pct.
+soc_max_pct = 100
+
+# Whether to sell surplus solar OUTSIDE the plan's battery-discharge windows.
+#
+# Deye cannot express "sell solar but leave the battery alone": one sell-power
+# register and one per-slot SOC target govern both, and a slot target below the
+# current level is an instruction to empty the pack into the grid.
+#
+#   false (default)  Sell power is 0 W outside the planned windows, so idle
+#                    slots can sit at the battery minimum and the battery stays
+#                    free to carry the house. Surplus solar goes to the battery
+#                    first and is otherwise not exported.
+#   true             Sell power follows the plan everywhere, and every slot the
+#                    plan might export through is pinned to soc_max_pct so the
+#                    battery is never the surplus. Sells more solar, but the
+#                    battery cannot serve load during those slots -- on a plant
+#                    whose prices sit above min_sell_price most of the day that
+#                    can mean importing from the grid overnight.
+sell_solar_outside_windows = false
+
+# Write bit 5 ("sell") of each TOU slot's control register (172-177).
+# Set false if your firmware does not expose a per-slot Sell column -- selling
+# is then governed solely by the work-mode register the dispatcher already
+# drives from the plan's export events.
+write_sell_bit = true
