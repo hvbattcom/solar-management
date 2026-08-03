@@ -11,9 +11,8 @@ _spec = importlib.util.spec_from_file_location("deye_dispatcher", _ROOT / "deye"
 d     = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(d)
 
-OPTS = {"inverter_power_w": 30000, "idle_floor_pct": 10, "soc_max_pct": 100,
-        "write_sell_bit": True, "battery_count": 2, "max_sell_power_w": 0,
-        "sell_solar_outside_windows": True}
+OPTS = {"inverter_power_w": 30000, "write_sell_bit": True, "battery_count": 2,
+        "max_sell_power_w": 0, "sell_solar_outside_windows": True}
 
 FLOOR, SOC_HI, SELL_W = 15, 100, 30000
 
@@ -170,10 +169,12 @@ assert d.resolve_battery_count({"battery_count": 2}, zona) == 2, "config overrid
 m = {"segments": [{"action": "battery_mode", "soc_floor_pct": 18},
                   {"action": "sell_batt",    "soc_floor_pct": 23},
                   {"action": "selling_first", "soc_floor_pct": 18}]}
-assert d.soc_envelope(m, OPTS) == (18, 100)
-assert d.soc_envelope({}, OPTS) == (10, 100)
-# An explicit envelope from the planner wins over the segment scan.
-assert d.soc_envelope({"soc_min_pct": 15, "soc_max_pct": 90, **m}, OPTS) == (15, 90)
+# The envelope comes from the map, never from local config.
+assert d.soc_envelope(m) == (18, 100), "older maps still imply the low end"
+assert d.soc_envelope({"soc_min_pct": 15, "soc_max_pct": 90, **m}) == (15, 90), \
+    "an explicit envelope wins over the segment scan"
+assert d.soc_envelope({}) == (d.SOC_MIN_LAST_RESORT, 100), \
+    "a map with nothing to go on falls back cautiously, not to a config guess"
 
 # ── 11. SoC guard fires only inside a window at/below floor+2 ────────────────
 assert d._soc_guard_would_fire(real, d._tm("20:30"), 24) is True
