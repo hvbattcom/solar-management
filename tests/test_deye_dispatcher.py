@@ -12,13 +12,13 @@ d     = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(d)
 
 OPTS = {"inverter_power_w": 30000, "write_sell_bit": True, "battery_count": 2,
-        "max_sell_power_w": 0, "sell_solar_outside_windows": True}
+        "max_sell_power_w": 0, "sell_surplus_when_full": True}
 
 FLOOR, SOC_HI, SELL_W = 15, 100, 30000
 
 
-def build(tou, now="12:00", opts=OPTS, lo=FLOOR, hi=SOC_HI, events=None):
-    return d.build_desired_slots(tou, d._tm(now), opts, lo, hi, SELL_W, events)
+def build(tou, now="12:00", opts=OPTS, lo=FLOOR, hi=SOC_HI, surplus=False):
+    return d.build_desired_slots(tou, d._tm(now), opts, lo, hi, SELL_W, surplus)
 
 
 def w(start, end, floor=20, amps=100):
@@ -235,7 +235,7 @@ assert d.apply_export(True, on_gen, 27.0, 27000, "http://x", False) is False
 
 # Outside a window the mode goes back to zero-export even though the plan says on.
 posted.clear()
-assert d.apply_export(True, on_gen, 27.0, 27000, "http://x", False, in_window=False) is True
+assert d.apply_export(True, on_gen, 27.0, 27000, "http://x", False, export_open=False) is True
 assert posted[-1][1] == {"limit_control": "Zero Export to CT"}, posted[-1]
 assert "max_sell_power_w" not in posted[-1][1], "no ceiling is written when not selling"
 
@@ -248,7 +248,7 @@ assert posted[-1][1] == {"limit_control": "Zero Export to CT",
 
 posted.clear()
 assert d.apply_export(True, dict(off_gen, solar_sell_enable=False), 27.0, 27000,
-                      "http://x", False, in_window=False) is True
+                      "http://x", False, export_open=False) is True
 assert posted[-1][1] == {"solar_sell_enable": True}, posted[-1]
 assert "limit_control" not in posted[-1][1], \
     "price says sell, but no window is open — mode must stay put"
@@ -267,50 +267,34 @@ slots = build(deep, lo=lo, hi=hi)
 assert next(s for s in slots if s["sell"])["soc_pct"] == lo, "floor must clamp up to batt_min"
 assert all(s["soc_pct"] == lo for s in slots), "idle slots sit at the battery minimum"
 
-# ── 15. A slot the plan may export through must not invite a drain ───────────
-# This is the failure that emptied a real battery: export power open while the
-# active slot targets batt_min, so the pack itself becomes the "surplus".
-ev = [{"time": "00:00", "export": False},
-      {"time": "09:00", "export": True},      # solar-only selling, no battery window
-      {"time": "18:00", "export": False}]
-mask = d.export_mask(ev)
-assert mask[0] is False and mask[540] is True and mask[1080] is False
-assert d._exports_during(mask, 480, 600) is True, "partial overlap counts as exporting"
-assert d._exports_during(mask, 0, 480) is False
-# A cyclic day: the state at 00:00 comes from the last event, not a default.
-assert d.export_mask([{"time": "06:00", "export": False},
-                      {"time": "20:00", "export": True}])[0] is True
+# ── 15. Selling surplus solar needs a full pack ──────────────────────────────
+# Deye cannot say "sell the PV but not the battery". A pack already at its
+# target has nothing below the target to drain, which is the one state where
+# opening the mode moves only surplus.
+assert d.battery_full(100, 100) is True
+assert d.battery_full(98, 100) is True, "the margin keeps the decision sticky"
+assert d.battery_full(90, 100) is False, "a pack with room must charge, not sell"
+assert d.battery_full(None, 100) is False, "no SoC reading means no surplus claim"
+assert d.battery_full(40, 40) is True, "a low envelope top still counts as full"
 
 night = [w("20:30", "22:00", 17)]
-slots = build(night, now="12:00", lo=15, hi=90, events=ev)
-check_invariants(slots, "export-aware targets")
-for s in slots:
-    nxt = slots[(slots.index(s) + 1) % len(slots)][ "time"]
-    exporting = d._exports_during(mask, d._tm(s["time"]), d._tm(nxt))
-    if s.get("sell"):
-        assert s["soc_pct"] == 17, "selling window keeps the plan's floor"
-    elif exporting:
-        assert s["soc_pct"] == 90, \
-            f"slot {s['slot']} at {s['time']} may export — must target soft max, got {s['soc_pct']}"
-    else:
-        assert s["soc_pct"] == 15, "non-exporting slot may carry the house"
 
-# With no events at all nothing can export, so every idle slot may serve load.
-slots = build(night, lo=15, hi=90, events=[])
+# Not selling surplus: every idle slot sits at batt_min so it can carry the house.
+slots = build(night, now="12:00", lo=15, hi=90, surplus=False)
+check_invariants(slots, "no surplus")
 assert all(s["soc_pct"] == 15 for s in slots if not s.get("sell"))
 
-# ── 16. Default policy: no export outside the planned windows ────────────────
-# Deye cannot separate "sell surplus solar" from "sell the battery", so the
-# safe default declines the former and leaves every idle slot free to carry
-# the house at batt_min.
-safe = dict(OPTS, sell_solar_outside_windows=False)
-slots = build(night, now="12:00", opts=safe, lo=15, hi=90, events=ev)
-check_invariants(slots, "battery-windows-only")
-assert all(s["soc_pct"] == 15 for s in slots if not s.get("sell")), \
-    "idle slots must stay at batt_min so the battery can serve the house"
-assert next(s for s in slots if s["sell"])["soc_pct"] == 17
+# Selling surplus: only the LIVE slot is pinned to the top of the envelope.
+slots = build(night, now="12:00", lo=15, hi=90, surplus=True)
+check_invariants(slots, "surplus")
+live = [s for s in slots if s["soc_pct"] == 90]
+assert len(live) == 1, f"exactly the live slot should be pinned, got {len(live)}"
+assert d._tm(live[0]["time"]) <= d._tm("12:00"), "the pinned slot must be the live one"
+assert not live[0].get("sell"), "the pinned slot is not a selling window"
+assert next(s for s in slots if s.get("sell"))["soc_pct"] == 17, \
+    "a real window keeps the plan's floor regardless"
 
-# Export is withheld outside a window and released inside one.
+# ── 16. Export is withheld unless a window is open or the pack is full ───────
 assert d.exports_now(True, 27.0, False) is False
 assert d.exports_now(True, 27.0, True) is True
 

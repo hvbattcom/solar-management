@@ -187,12 +187,15 @@ the inverter works to get there — with the work mode selling, that means expor
 to the grid. So every slot carries a deliberate value: the plan's floor inside a selling
 window, and the battery minimum elsewhere, where the pack is free to carry the house.
 
-**Export is switched with the work mode, and only inside a planned window.** Deye has no
-equivalent of Solis's `allow_export` permission: "Selling First" is an instruction to export
-up to `max_sell_power_w`, taking from PV *and the battery*. It is safe only while every slot
-it spans targets at or above the battery's current level. And because Deye cannot say "sell
-the solar but not the battery" — one mode governs both — the default is to not export outside
-the plan's own discharge windows. See `sell_solar_outside_windows` for that trade-off.
+**Export is switched with the work mode.** Deye has no equivalent of Solis's `allow_export`
+permission: "Selling First" is an instruction to export up to `max_sell_power_w`, taking from
+PV *and the battery*. It is safe only while the live slot targets at or above the battery's
+current level.
+
+It opens inside a planned window, and outside one only while the pack is **full** — at its
+target there is nothing below the target left to drain, so the only thing that can leave is
+genuine surplus solar. That is how "sell the PV but not the battery", which Deye has no way
+to express, gets expressed anyway. `sell_surplus_when_full = false` declines it entirely.
 
 > `max_sell_power_w` cannot serve as the on/off control. The register accepts 0 and holds it
 > under Zero Export to CT, but once the mode is Selling First the plant's configured limit
@@ -230,8 +233,11 @@ registers whose value actually differs are written, so a steady day costs no EEP
 
 The dispatcher reads the `[DeyeAPI]` section of `config.cfg`: `port`,
 `mothership_prometheus_api`, `battery_count`, `max_charge_amps`, `max_sell_power_w`,
-`idle_floor_pct`, `soc_max_pct`, `sell_solar_outside_windows` and `write_sell_bit`. See
-`config.cfg.example` for what each one does.
+`sell_surplus_when_full` and `write_sell_bit`. See `config.cfg.example` for what each does.
+
+The battery's SoC envelope is *not* among them: `soc_min_pct` / `soc_max_pct` come from the
+map, since they are the same `batt_min` / `batt_soft_max_soc` the plan was built against and
+a local copy could only drift out of agreement with it.
 
 Three of those are worth setting deliberately per plant:
 
@@ -241,11 +247,9 @@ Three of those are worth setting deliberately per plant:
 - **`battery_count`** — `auto` asks the inverter, treating 0 A limits on the second battery
   as "not installed". Getting this wrong is not cosmetic: assuming two batteries on a
   single-battery plant halves the charge current all day.
-- **`sell_solar_outside_windows`** — off by default. Turning it on sells surplus PV outside
-  the plan's discharge windows, but the only way to protect the battery there is to pin those
-  slots to `soc_max_pct`, which stops the pack serving the house. On a plant whose prices sit
-  above `min_sell_price` most of the day that means importing overnight, so weigh it against
-  how much surplus actually survives charging the battery.
+- **`sell_surplus_when_full`** — on by default. Only the *live* slot is pinned to the top of
+  the envelope, and only while the pack is full, so the battery is never locked out of
+  carrying the house at other times. Turn it off to never export outside a planned window.
 
 Set `write_sell_bit = false` if your firmware has no per-slot Sell column — selling is then
 governed solely by the work-mode register, which the dispatcher drives from the plan's export
