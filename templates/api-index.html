@@ -239,25 +239,25 @@
                 <label>Mode <span class="lbl-note">— what may leave the plant</span></label>
                 <div class="inv-sel" id="zero_export" data-value="Selling First"
                      data-hint="mode-hint" onclick="selToggle(this)">
-                  <div class="inv-sel-val">Export allowed</div>
+                  <div class="inv-sel-val">Selling First</div>
                   <div class="inv-sel-opts">
                     <div class="inv-sel-opt sel" data-val="Selling First"
                          data-hint="Exports up to Sell Power. Draws from PV and, wherever a ToU slot's SOC target sits below the current level, from the battery too."
                          onclick="selPick(this, event)">
-                      <span class="opt-name">Export allowed</span>
-                      <span class="opt-desc">Sells to grid — can also sell the battery</span>
+                      <span class="opt-name">Selling First</span>
+                      <span class="opt-desc">Exports to grid — can also sell the battery</span>
+                    </div>
+                    <div class="inv-sel-opt" data-val="Zero Export to Load"
+                         data-hint="Nothing is exported, limited at the load side."
+                         onclick="selPick(this, event)">
+                      <span class="opt-name">Zero Export to Load</span>
+                      <span class="opt-desc">No export — limited at the load</span>
                     </div>
                     <div class="inv-sel-opt" data-val="Zero Export to CT"
                          data-hint="Nothing is exported, measured at the grid meter. The battery still serves the house."
                          onclick="selPick(this, event)">
-                      <span class="opt-name">No export (grid meter)</span>
-                      <span class="opt-desc">Nothing leaves the plant — battery still serves the house</span>
-                    </div>
-                    <div class="inv-sel-opt" data-val="Zero Export to Load"
-                         data-hint="Nothing is exported, measured at the load side."
-                         onclick="selPick(this, event)">
-                      <span class="opt-name">No export (load side)</span>
-                      <span class="opt-desc">Nothing leaves the plant — limited at the load</span>
+                      <span class="opt-name">Zero Export to CT</span>
+                      <span class="opt-desc">No export — measured at the grid meter</span>
                     </div>
                   </div>
                 </div>
