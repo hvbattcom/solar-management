@@ -50,6 +50,11 @@ charge target instead.
 All amps values are split equally across the configured batteries (min 1 A each).
 
 Crontab:  */5 * * * *  /usr/bin/python3 /path/to/dispatcher.py
+
+No redirection needed — output goes to dispatcher.log (rotated), and the
+terminal echo is suppressed when stdout is not a TTY, so cron stays quiet.
+An instance only has to be named with --instance where one host serves several
+plants; otherwise today's map is found on its own.
 """
 
 import argparse
@@ -108,10 +113,14 @@ def _setup_log() -> logging.Logger:
     fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     fh  = RotatingFileHandler(_LOG_FILE, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
     fh.setFormatter(fmt)
-    sh  = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
     logger.addHandler(fh)
-    logger.addHandler(sh)
+    # Echo to the terminal only when there is one. Under cron every line would
+    # otherwise have to be redirected somewhere, and redirecting to a file just
+    # duplicates dispatcher.log into a second copy that nothing rotates.
+    if sys.stdout.isatty():
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
     return logger
 
 log = _setup_log()
