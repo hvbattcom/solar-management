@@ -38,7 +38,7 @@ DARK = 0
 # throughout, so power is the only thing standing between plan and grid.
 ev_bank = [{"time": "00:00", "export": False, "charge_amps": 40}]
 plan = d.decide(m(events=ev_bank), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
-assert plan["power"] == 0, "no sale means no slot power"
+assert plan["sell"] is False, "no sale means no sell bit"
 assert plan["target"] == 15, "batt_min, so the pack runs the load"
 assert plan["charge_a"] == 40, "and banks the surplus"
 assert plan["reason"] == "carrying the house"
@@ -50,7 +50,7 @@ ev_solar = [{"time": "00:00", "export": True, "charge_amps": 1}]
 plan = d.decide(m(events=ev_solar), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
 assert plan["reason"] == "selling solar surplus"
 assert plan["mode"] == d.MODE_SELL, "the gate has to be open to sell anything"
-assert plan["power"] == 0, "the pack must not be sold"
+assert plan["sell"] is False, "the pack must not be sold"
 assert plan["target"] == 100, "above SoC, so it cannot feed the sale either"
 assert plan["charge_a"] == 1, "and cannot absorb the surplus"
 
@@ -62,7 +62,7 @@ assert plan["reason"] == "carrying the house"
 
 # Price below threshold is not a solar sale either, however bright it is.
 plan = d.decide(m(events=ev_bank), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
-assert plan["target"] == 15 and plan["power"] == 0
+assert plan["target"] == 15 and plan["sell"] is False
 
 # ── 2b. The sell bit rides with the slot power ──────────────────────────────
 # Measured: 30 kW of slot power against a target 8 points below SoC sold nothing
@@ -71,6 +71,8 @@ assert plan["target"] == 15 and plan["power"] == 0
 # sale.
 _solar = d.decide(m(events=ev_solar), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
 assert d.desired_slots(_solar, OPTS)[0]["sell"] is False, "solar sale must not arm the bit"
+assert d.desired_slots(_solar, OPTS)[0]["power_w"] > 0, \
+    "but the pack must still be able to carry the house through a cloud"
 _house = d.decide(m(events=ev_bank), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
 assert d.desired_slots(_house, OPTS)[0]["sell"] is False
 
@@ -79,32 +81,54 @@ win = m(windows=[("20:00", "22:00", 17)], events=ev_solar, sell_kw=27.0)
 plan = d.decide(win, d._tm("21:00"), live(soc=80, pv=DARK), OPTS)
 assert plan["reason"] == "window: selling the battery"
 assert plan["mode"] == d.MODE_SELL
-assert plan["power"] == 27000, "the map's sell power"
+assert plan["sell"] is True, "the bit is what opens a battery sale"
+assert plan["ceiling"] == 27000, "the map's sell power caps the sale on reg 143"
 assert plan["target"] == 17, "and the window's own floor"
 assert all(s["sell"] is True for s in d.desired_slots(plan, OPTS)), \
     "a battery sale arms the bit on every slot"
 
 off = m(windows=[("20:00", "22:00", 17)], events=ev_bank)
-assert d.decide(off, d._tm("21:00"), live(soc=80), OPTS)["power"] == 0, \
+assert d.decide(off, d._tm("21:00"), live(soc=80), OPTS)["sell"] is False, \
     "a window under the price threshold sells nothing"
-assert d.decide(win, d._tm("19:00"), live(soc=80, pv=DARK), OPTS)["power"] == 0, \
+assert d.decide(win, d._tm("19:00"), live(soc=80, pv=DARK), OPTS)["sell"] is False, \
     "outside its hours the window is inert"
 
 # ── 4. The SoC guard is a backstop, not an early stop ───────────────────────
 # The planner's tou_floor_margin is set so a window runs out of time before it
 # runs out of charge; withholding above the floor would eat that margin.
-assert d.decide(win, d._tm("21:00"), live(soc=18, pv=DARK), OPTS)["power"] == 27000, \
+assert d.decide(win, d._tm("21:00"), live(soc=18, pv=DARK), OPTS)["sell"] is True, \
     "one point above the floor must still sell"
-assert d.decide(win, d._tm("21:00"), live(soc=17, pv=DARK), OPTS)["power"] == 0, \
+assert d.decide(win, d._tm("21:00"), live(soc=17, pv=DARK), OPTS)["sell"] is False, \
     "at the floor it stops"
-assert d.decide(win, d._tm("21:00"), live(soc=10, pv=DARK), OPTS)["power"] == 0
+assert d.decide(win, d._tm("21:00"), live(soc=10, pv=DARK), OPTS)["sell"] is False
 
 # ── 5. Sell power comes from the map, capped by the plant limit ─────────────
 capped = dict(OPTS, max_sell_power_w=20000)
-assert d.decide(win, d._tm("21:00"), live(soc=80), capped)["power"] == 20000
+assert d.decide(win, d._tm("21:00"), live(soc=80), capped)["ceiling"] == 20000
 w10 = m(windows=[("20:00", "22:00", 17)], events=ev_solar, sell_kw=10.0)
-assert d.decide(w10, d._tm("21:00"), live(soc=80), capped)["power"] == 10000, \
+assert d.decide(w10, d._tm("21:00"), live(soc=80), capped)["ceiling"] == 10000, \
     "a cap never raises a lower plan"
+
+# ── 5b. Slot power is the discharge allowance and is NEVER 0 ────────────────
+# At 0 the pack cannot even carry the house and the plant silently imports —
+# that was the standing grid draw. It is the inverter rating in every state, and
+# deliberately not the sell power, so lowering the export limit cannot throttle
+# the house supply.
+_states = [
+    d.decide(m(events=ev_bank), d._tm("23:00"), live(soc=40, pv=DARK), OPTS),
+    d.decide(m(events=ev_bank), d._tm("14:16"), live(soc=32, pv=SUN), OPTS),
+    d.decide(m(events=ev_solar), d._tm("12:00"), live(soc=32, pv=SUN), OPTS),
+    d.decide(win, d._tm("21:00"), live(soc=80, pv=DARK), OPTS),
+    d.decide(win, d._tm("21:00"), live(soc=10, pv=DARK), OPTS),   # guarded
+]
+for _p in _states:
+    assert _p["power"] == OPTS["inverter_power_w"], (_p["reason"], _p["power"])
+    for _s in d.desired_slots(_p, OPTS):
+        assert _s["power_w"] == OPTS["inverter_power_w"], _p["reason"]
+
+# A small sell power must not shrink the house supply.
+_small = d.decide(m(events=ev_bank, sell_kw=5.0), d._tm("23:00"), live(soc=40), OPTS)
+assert _small["power"] == 30000 and _small["ceiling"] == 5000, _small
 
 # ── 6. Floors are clamped into the planner's envelope ────────────────────────
 deep = m(windows=[("20:00", "22:00", 5)], events=EXPORT_ON, lo=15, hi=90)
@@ -131,8 +155,8 @@ assert d.active_window(straddle["tou_slots"], d._tm("12:00")) is None
 many = m(windows=[(f"{h:02d}:00", f"{h:02d}:30", 17) for h in range(0, 24, 2)],
          events=EXPORT_ON)
 assert len(many["tou_slots"]) == 12
-assert d.decide(many, d._tm("08:15"), live(soc=80), OPTS)["power"] > 0
-assert d.decide(many, d._tm("08:45"), live(soc=80, pv=DARK), OPTS)["power"] == 0
+assert d.decide(many, d._tm("08:15"), live(soc=80), OPTS)["sell"] is True
+assert d.decide(many, d._tm("08:45"), live(soc=80, pv=DARK), OPTS)["sell"] is False
 
 # ── 8. Charge current: restored outside windows, split, capped ───────────────
 ev = [{"time": "00:00", "export": True, "charge_amps": 40},
