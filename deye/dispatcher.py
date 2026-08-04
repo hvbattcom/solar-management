@@ -14,24 +14,23 @@ dispatcher does not put the schedule in the inverter at all:
     slot TIMES are fixed scaffolding, written once and never touched
     slot VALUES are the live control signal, rewritten when intent changes
 
-The plan is executed here, every five minutes. The work mode stays at Selling
-First throughout — it is not a control. What leaves the plant is decided by the
-slot POWER register, which is the battery's sell rate, together with the target,
-which says whether the pack may be drawn on at all:
+The plan is executed here, every five minutes, as one of three states. Each
+names its own work mode, slot power, target and charge current — and the mode
+matters as much as the rest: banking with the gate left open makes the plant
+sell the PV it was told to store and puts the house on the grid.
 
-    carrying the house   power 0, target batt_min. The pack runs the load and
-                         surplus solar charges it. Nothing is sold.
-    selling solar        power 0, target ABOVE SoC, charge throttled to ~1 A, so
+    carrying the house   mode SHUT, power 0, target batt_min, charge full.
+                         The pack runs the load and the sun charges it.
+    selling solar        mode open, power 0, target ABOVE SoC, charge ~1 A, so
                          the pack can neither absorb the surplus nor feed the
                          sale and only PV leaves.
-    selling the battery  power = the plan's sell power, target = the window's
-                         floor, so the pack drains into the grid down to it.
+    selling the battery  mode open, power = the plan's sell power, target = the
+                         window's floor, sell bit armed.
 
-The sell bit rides with the slot power — set together for a battery sale, clear
-together otherwise. Measured: slot power 30 kW against a target below SoC sells
-nothing on its own, and setting the bit alone starts 16 kW flowing within
-seconds. So the bit is required even in Selling First, and clearing it is what
-keeps the pack out of a solar-only sale. Every figure above comes from the map.
+The sell bit rides with the slot power. Measured: 30 kW of slot power against a
+target below SoC sells nothing until the bit goes on, then 16 kW flows within
+seconds — so the bit is required even in Selling First, and clearing it is what
+keeps the pack out of a solar-only sale. Every figure comes from the map.
 
 Windows therefore cost nothing. Twelve of them are the same as two, resolved at
 5-minute granularity, and a window landing next to a slot boundary — which used
@@ -72,7 +71,15 @@ DAY_MIN             = 1440
 # because the hardware insists on six of them.
 SCAFFOLD_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"]
 
-# The work mode is held at Selling First permanently. A battery sale then needs
+# The work mode IS a control, one per state. Banking solar needs the gate shut:
+# left at Selling First the plant sells the PV instead of storing it, and the
+# house — which that PV would have covered — falls back to the grid. That is the
+# few-hundred-watt draw that kept reappearing. Measured on the plant: same state,
+# flip 142 to Zero Export to CT, and the draw goes.
+MODE_SELL   = "Selling First"
+MODE_CLOSED = "Zero Export to CT"
+
+# A battery sale needs
 # three things together — the sell bit, a slot power above zero, and a target
 # below SoC — and drops any one of them to stop. Measured on the plant: power at
 # 30 kW with a target 8 points under SoC sold nothing until the bit went on, and
@@ -81,8 +88,6 @@ SCAFFOLD_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"]
 # Earlier readings of this were confounded because the slot power was held high
 # in all of them, so it never appeared as the variable and the mode looked like
 # the cause.
-PERSISTENT_MODE = "Selling First"
-
 # Selling surplus solar means giving it nowhere else to go: the charge current
 # drops to ~1 A so the pack cannot absorb it, and the target goes ABOVE SoC so
 # the pack will not discharge into the sale either. Only PV is left to leave.
@@ -317,11 +322,12 @@ def decide(m: dict, now_min: int, live: dict, opts: dict) -> dict:
         if SOC_GUARD_AT_FLOOR and live["soc"] <= floor:
             log.warning("soc guard: %d%% is at or below the floor %d%% — not selling",
                         live["soc"], floor)
+            # The pack is spent, but the sun may still be worth selling.
             return {"target": floor, "power": 0, "ceiling": sell_power,
-                    "solar_sell": price_ok, "charge_a": charge_a,
+                    "mode": MODE_SELL, "solar_sell": price_ok, "charge_a": charge_a,
                     "reason": "window (guarded at the floor)"}
         return {"target": floor, "power": sell_power, "ceiling": sell_power,
-                "solar_sell": price_ok, "charge_a": charge_a,
+                "mode": MODE_SELL, "solar_sell": price_ok, "charge_a": charge_a,
                 "reason": "window: selling the battery"}
 
     # The plan signals that it expects to sell solar by dropping charge_amps;
@@ -331,11 +337,13 @@ def decide(m: dict, now_min: int, live: dict, opts: dict) -> dict:
                      and live["pv_w"] >= SOLAR_SELL_MIN_PV_W)
     if selling_solar:
         return {"target": hi, "power": 0, "ceiling": sell_power,
-                "solar_sell": True, "charge_a": charge_a,
+                "mode": MODE_SELL, "solar_sell": True, "charge_a": charge_a,
                 "reason": "selling solar surplus"}
 
+    # Banking: the gate must be SHUT, or the plant sells the PV it was told to
+    # store and puts the house on the grid.
     return {"target": lo, "power": 0, "ceiling": sell_power,
-            "solar_sell": price_ok, "charge_a": charge_a,
+            "mode": MODE_CLOSED, "solar_sell": price_ok, "charge_a": charge_a,
             "reason": "carrying the house"}
 
 
@@ -402,13 +410,13 @@ def sync_slots(plan: dict, fw_tou: dict, opts: dict, api_url: str,
     return True, False
 
 
-def pin_mode(fw_general: dict, api_url: str, dry_run: bool) -> bool:
-    """Hold the work mode at Zero Export to CT. It is an invariant rather than a
-    control — anything the plant sells goes out through a slot's sell bit."""
-    if fw_general.get("limit_control") == PERSISTENT_MODE:
+def sync_mode(want: str, fw_general: dict, api_url: str, dry_run: bool) -> bool:
+    """Written on its own so the caller controls the ordering: shut before the
+    slots change, opened only after they have been read back and confirmed."""
+    if fw_general.get("limit_control") == want:
         return False
-    log.info("mode → %s (pinned)", PERSISTENT_MODE)
-    _post(api_url, "/api/settings/general", {"limit_control": PERSISTENT_MODE}, dry_run)
+    log.info("mode → %s", want)
+    _post(api_url, "/api/settings/general", {"limit_control": want}, dry_run)
     return True
 
 
@@ -468,6 +476,7 @@ def show(m: dict, now_min: int, live: dict, plan: dict) -> None:
     print(f"\nLive   soc {live['soc']}%   pv {live['pv_w']:.0f} W   "
           f"batt {live['batt_w']:+.0f} W   grid {live['grid_w']:+.0f} W")
     print(f"\nNow {_fmt(now_min % DAY_MIN)} → {plan['reason']}")
+    print(f"  mode        {plan['mode']}")
     print(f"  target      {plan['target']}%")
     print(f"  slot power  {plan['power']} W   (sell ceiling {plan['ceiling']} W)")
     print(f"  solar sell  {plan['solar_sell']}")
@@ -528,15 +537,23 @@ def main() -> None:
     fw_battery = fw.get("battery")
     n_bat      = resolve_battery_count(cfg, fw_battery)
 
-    hits = [ensure_tou_enabled(fw_tou, cfg["api_url"], args.dry_run),
-            pin_mode(fw_general, cfg["api_url"], args.dry_run)]
+    # Shutting the gate comes first and opening it comes last, so export is
+    # never enabled over a slot block that has not been confirmed.
+    hits = [ensure_tou_enabled(fw_tou, cfg["api_url"], args.dry_run)]
+    if plan["mode"] == MODE_CLOSED:
+        hits.append(sync_mode(MODE_CLOSED, fw_general, cfg["api_url"], args.dry_run))
 
     wrote, verified = sync_slots(plan, fw_tou, cfg, cfg["api_url"], args.dry_run)
     hits.append(wrote)
-    if not verified:
-        log.error("slot block did not verify — the sell bit may be left wrong")
     hits.append(sync_general(plan, fw_general, cfg["api_url"], args.dry_run))
     hits.append(sync_battery(plan, fw_battery, n_bat, cfg, cfg["api_url"], args.dry_run))
+
+    if plan["mode"] != MODE_CLOSED:
+        if verified:
+            hits.append(sync_mode(plan["mode"], fw_general, cfg["api_url"], args.dry_run))
+        else:
+            log.error("refusing to open export over a slot block that did not verify")
+            hits.append(sync_mode(MODE_CLOSED, fw_general, cfg["api_url"], args.dry_run))
 
     if not any(hits):
         log.info("all up to date")
