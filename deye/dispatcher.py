@@ -19,18 +19,22 @@ names its own work mode, slot power, target and charge current — and the mode
 matters as much as the rest: banking with the gate left open makes the plant
 sell the PV it was told to store and puts the house on the grid.
 
-    carrying the house   mode SHUT, power 0, target batt_min, charge full.
-                         The pack runs the load and the sun charges it.
-    selling solar        mode open, power 0, target ABOVE SoC, charge ~1 A, so
-                         the pack can neither absorb the surplus nor feed the
-                         sale and only PV leaves.
-    selling the battery  mode open, power = the plan's sell power, target = the
-                         window's floor, sell bit armed.
+    carrying the house   mode SHUT, target batt_min, charge full. The pack runs
+                         the load and the sun charges it.
+    selling solar        mode open, target ABOVE SoC, charge ~1 A, so the pack
+                         can neither absorb the surplus nor feed the sale and
+                         only PV leaves.
+    selling the battery  mode open, target = the window's floor, sell bit armed.
 
-The sell bit rides with the slot power. Measured: 30 kW of slot power against a
-target below SoC sells nothing until the bit goes on, then 16 kW flows within
-seconds — so the bit is required even in Selling First, and clearing it is what
-keeps the pack out of a solar-only sale. Every figure comes from the map.
+Slot power is NOT one of those controls. It is the battery's discharge
+allowance, and it is held at the inverter rating in every state: set to 0 the
+pack cannot even carry the house, and the plant quietly imports instead. What
+gates a sale is the sell bit — 30 kW of slot power against a target below SoC
+sold nothing until the bit went on, then 16 kW flowed within seconds. The plan's
+sell power caps the sale on register 143, deliberately not here, so lowering the
+export limit can never throttle the house supply.
+
+Every figure comes from the map.
 
 Windows therefore cost nothing. Twelve of them are the same as two, resolved at
 5-minute granularity, and a window landing next to a slot boundary — which used
@@ -79,15 +83,11 @@ SCAFFOLD_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"]
 MODE_SELL   = "Selling First"
 MODE_CLOSED = "Zero Export to CT"
 
-# A battery sale needs
-# three things together — the sell bit, a slot power above zero, and a target
-# below SoC — and drops any one of them to stop. Measured on the plant: power at
-# 30 kW with a target 8 points under SoC sold nothing until the bit went on, and
-# then 16 kW flowed within seconds.
+# A battery sale needs the sell bit AND a target below SoC. Measured: 30 kW of
+# slot power with a target 8 points under SoC sold nothing until the bit went on,
+# and then 16 kW flowed within seconds — so the bit is the export gate, and the
+# slot power is not.
 #
-# Earlier readings of this were confounded because the slot power was held high
-# in all of them, so it never appeared as the variable and the mode looked like
-# the cause.
 # Selling surplus solar means giving it nowhere else to go: the charge current
 # drops to ~1 A so the pack cannot absorb it, and the target goes ABOVE SoC so
 # the pack will not discharge into the sale either. Only PV is left to leave.
@@ -311,6 +311,13 @@ def decide(m: dict, now_min: int, live: dict, opts: dict) -> dict:
     win      = active_window(m.get("tou_slots", []), now_min)
     charge_a = want.get("charge_amps")
 
+    # What the pack may deliver, in every state. Never 0: the register is the
+    # battery's discharge allowance, and at 0 it cannot even carry the house —
+    # the plant silently imports instead. Deliberately the inverter rating and
+    # NOT the plan's sell power, so lowering the export limit can never throttle
+    # the house supply; the sale is capped by register 143 instead.
+    discharge_w = opts["inverter_power_w"]
+
     sell_power = int(float(m.get("sell_kw", 0)) * 1000)
     if sell_power <= 0:
         sell_power = opts["inverter_power_w"]
@@ -323,11 +330,13 @@ def decide(m: dict, now_min: int, live: dict, opts: dict) -> dict:
             log.warning("soc guard: %d%% is at or below the floor %d%% — not selling",
                         live["soc"], floor)
             # The pack is spent, but the sun may still be worth selling.
-            return {"target": floor, "power": 0, "ceiling": sell_power,
-                    "mode": MODE_SELL, "solar_sell": price_ok, "charge_a": charge_a,
+            return {"target": floor, "power": discharge_w, "sell": False,
+                    "ceiling": sell_power, "mode": MODE_SELL,
+                    "solar_sell": price_ok, "charge_a": charge_a,
                     "reason": "window (guarded at the floor)"}
-        return {"target": floor, "power": sell_power, "ceiling": sell_power,
-                "mode": MODE_SELL, "solar_sell": price_ok, "charge_a": charge_a,
+        return {"target": floor, "power": discharge_w, "sell": True,
+                "ceiling": sell_power, "mode": MODE_SELL,
+                "solar_sell": price_ok, "charge_a": charge_a,
                 "reason": "window: selling the battery"}
 
     # The plan signals that it expects to sell solar by dropping charge_amps;
@@ -336,14 +345,16 @@ def decide(m: dict, now_min: int, live: dict, opts: dict) -> dict:
                      and charge_a is not None and charge_a <= SOLAR_SELL_CHARGE_A
                      and live["pv_w"] >= SOLAR_SELL_MIN_PV_W)
     if selling_solar:
-        return {"target": hi, "power": 0, "ceiling": sell_power,
-                "mode": MODE_SELL, "solar_sell": True, "charge_a": charge_a,
+        return {"target": hi, "power": discharge_w, "sell": False,
+                "ceiling": sell_power, "mode": MODE_SELL,
+                "solar_sell": True, "charge_a": charge_a,
                 "reason": "selling solar surplus"}
 
     # Banking: the gate must be SHUT, or the plant sells the PV it was told to
     # store and puts the house on the grid.
-    return {"target": lo, "power": 0, "ceiling": sell_power,
-            "mode": MODE_CLOSED, "solar_sell": price_ok, "charge_a": charge_a,
+    return {"target": lo, "power": discharge_w, "sell": False,
+            "ceiling": sell_power, "mode": MODE_CLOSED,
+            "solar_sell": price_ok, "charge_a": charge_a,
             "reason": "carrying the house"}
 
 
@@ -377,7 +388,7 @@ def slots_match(plan: dict, fw_tou: dict, opts: dict) -> bool:
 def desired_slots(plan: dict, opts: dict) -> list:
     return [{"slot": n + 1, "time": SCAFFOLD_TIMES[n],
              "power_w": plan["power"],
-             "soc_pct": plan["target"], "sell": plan["power"] > 0,
+             "soc_pct": plan["target"], "sell": plan["sell"],
              "grid_charge": False, "gen_charge": False}
             for n in range(TOU_SLOT_COUNT)]
 
@@ -393,11 +404,12 @@ def sync_slots(plan: dict, fw_tou: dict, opts: dict, api_url: str,
     to be identical, a partial write breaks the very invariant the design rests
     on, so the caller is told whether the schedule is trustworthy."""
     if slots_match(plan, fw_tou, opts):
-        log.debug("slots: up to date (target %d%%, power %d W)", plan["target"], plan["power"])
+        log.debug("slots: up to date (target %d%%, sell %s)", plan["target"], plan["sell"])
         return False, True
 
     want = desired_slots(plan, opts)
-    log.info("slots → target %d%%  power %d W  (%s)", plan["target"], plan["power"], plan["reason"])
+    log.info("slots → target %d%%  power %d W  sell %s  (%s)",
+             plan["target"], plan["power"], plan["sell"], plan["reason"])
     for attempt in range(1, attempts + 1):
         _post(api_url, "/api/settings/tou/all", want, dry_run)
         if dry_run:
@@ -478,7 +490,8 @@ def show(m: dict, now_min: int, live: dict, plan: dict) -> None:
     print(f"\nNow {_fmt(now_min % DAY_MIN)} → {plan['reason']}")
     print(f"  mode        {plan['mode']}")
     print(f"  target      {plan['target']}%")
-    print(f"  slot power  {plan['power']} W   (sell ceiling {plan['ceiling']} W)")
+    print(f"  slot power  {plan['power']} W   sell bit {plan['sell']}"
+          f"   (sell ceiling {plan['ceiling']} W)")
     print(f"  solar sell  {plan['solar_sell']}")
     print(f"  charge      {plan['charge_a']} A\n")
 

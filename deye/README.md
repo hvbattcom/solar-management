@@ -178,49 +178,43 @@ runs is a no-op and the dispatcher's 5-minute cadence is the only granularity
 that matters. Windows cost nothing: twelve are the same as two, and one landing
 next to a boundary — previously a real hazard — no longer means anything.
 
-### The two controls
+### The three states
 
-Export is gated by the **work mode (142)**, and only by it. The per-slot sell bit
-does *not* hold the battery back: with all six cleared, the mode left open and a
-target below SoC, the plant exported 24 kW off the pack at night with PV at zero.
-The bit is still written to match intent so the app reads coherently, but nothing
-depends on it.
+Everything is decided fresh each run and written from the map. There is no
+schedule in the inverter.
 
-| Control | Question |
-|---|---|
-| work mode (142) | may anything leave the plant at all? |
-| target vs SoC | what an open gate may draw from — below the current level the battery is dispatched, at or above it only surplus PV can leave |
+| Intent | work mode | slot SOC target | sell bit | charge current |
+|---|---|---|---|---|
+| Carrying the house | **Zero Export to CT** | `batt_min` | off | full |
+| Selling solar surplus | Selling First | **above SoC** (`batt_soft_max`) | off | ~1 A |
+| Selling the battery | Selling First | the window's floor | **on** | ~1 A |
 
-Three states, and the unsafe pairing (gate open with a low target outside a
-planned window) is unreachable from all of them:
+**The work mode is a control, not a constant.** Banking with the gate left open
+makes the inverter sell the PV it was told to store, and the house — which that
+PV would have covered — falls back to the grid.
 
-| Intent | mode | target |
-|---|---|---|
-| Carrying the house | closed | `batt_min` |
-| Selling solar surplus | open | at or above SoC |
-| Selling the battery | open | the window's floor |
+**The sell bit is what gates a battery sale.** Measured: 30 kW of slot power
+against a target below SoC sold nothing until the bit went on, then 16 kW flowed
+within seconds.
 
-Ordering matters and is enforced: closing writes the gate **first**, opening
-writes it **last**, after the slot block has been read back and confirmed. A
-half-applied block once left two slots selling with nothing logged, and the
-plant exported for a further fifteen minutes.
+**Selling solar is expressed as "nowhere else to go":** charge drops to ~1 A so
+the pack cannot absorb the surplus, and the target rises above SoC so it cannot
+feed the sale either. Only PV is left to leave. That state needs real sun — a
+high target after dark would hold the pack off the house and put the plant back
+on a grid trickle — so it also requires PV above 500 W.
 
-Every slot is written with grid charge **off**: a set grid-charge bit flips that
+**Slot power is none of those.** It is the battery's discharge allowance and is
+held at the inverter rating in *every* state. At 0 the pack cannot even carry the
+house and the plant silently imports; measured, the draw vanished the moment it
+went from 0 to the rating. The plan's sell power caps the sale on register 143
+instead, deliberately, so lowering the export limit can never throttle the house.
+
+Ordering is enforced: the mode is **shut before** the slot block changes and
+**opened only after** it has been read back and confirmed, so export is never
+live over a half-written schedule.
+
+Every slot is written with grid charge **off** — a set grid-charge bit flips that
 slot's SOC from "discharge down to" into "charge up to".
-
-### Hold or release, outside a window
-
-Whether the pack is held for banking or released to the house is decided from
-the **live power balance**, not the clock — a cloudy afternoon needs the battery
-on the house exactly as much as midnight does:
-
-```
-surplus = -(battery + grid)      what is charging the pack plus what is leaving
-```
-
-Held above +300 W of surplus, released once the house draws from the grid, and
-between the two the previous answer stands so it cannot flap. All of it read
-from the inverter itself; there is no Prometheus dependency.
 
 ### What it writes
 
