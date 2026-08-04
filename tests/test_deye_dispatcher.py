@@ -42,11 +42,14 @@ assert plan["power"] == 0, "no sale means no slot power"
 assert plan["target"] == 15, "batt_min, so the pack runs the load"
 assert plan["charge_a"] == 40, "and banks the surplus"
 assert plan["reason"] == "carrying the house"
+assert plan["mode"] == d.MODE_CLOSED, \
+    "banking with the gate open sells the PV and puts the house on the grid"
 
 # ── 2. Selling solar: power 0, target ABOVE SoC, charge throttled ───────────
 ev_solar = [{"time": "00:00", "export": True, "charge_amps": 1}]
 plan = d.decide(m(events=ev_solar), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
 assert plan["reason"] == "selling solar surplus"
+assert plan["mode"] == d.MODE_SELL, "the gate has to be open to sell anything"
 assert plan["power"] == 0, "the pack must not be sold"
 assert plan["target"] == 100, "above SoC, so it cannot feed the sale either"
 assert plan["charge_a"] == 1, "and cannot absorb the surplus"
@@ -75,6 +78,7 @@ assert d.desired_slots(_house, OPTS)[0]["sell"] is False
 win = m(windows=[("20:00", "22:00", 17)], events=ev_solar, sell_kw=27.0)
 plan = d.decide(win, d._tm("21:00"), live(soc=80, pv=DARK), OPTS)
 assert plan["reason"] == "window: selling the battery"
+assert plan["mode"] == d.MODE_SELL
 assert plan["power"] == 27000, "the map's sell power"
 assert plan["target"] == 17, "and the window's own floor"
 assert all(s["sell"] is True for s in d.desired_slots(plan, OPTS)), \
@@ -188,11 +192,18 @@ assert d.sync_slots(plan, fake_fw["tou"], OPTS, "http://x", False) == (False, Tr
 
 # ── 11. The work mode is a pinned invariant, never a control ────────────────
 posted.clear()
-assert d.pin_mode({"limit_control": "Selling First"}, "http://x", False) is False, \
-    "already pinned: nothing to write"
-assert d.pin_mode({"limit_control": "Zero Export to CT"}, "http://x", False) is True, \
-    "anything else gets pulled back"
+assert d.sync_mode(d.MODE_SELL, {"limit_control": d.MODE_SELL}, "http://x", False) is False, \
+    "already there: nothing to write"
+assert d.sync_mode(d.MODE_CLOSED, {"limit_control": d.MODE_SELL}, "http://x", False) is True
+assert posted[-1][1] == {"limit_control": "Zero Export to CT"}
+assert d.sync_mode(d.MODE_SELL, {"limit_control": d.MODE_CLOSED}, "http://x", False) is True
 assert posted[-1][1] == {"limit_control": "Selling First"}
+
+# Every non-selling state must shut the gate, whatever the price says.
+for _ev in (ev_bank, [{"time": "00:00", "export": True, "charge_amps": 38}]):
+    for _pv in (0, SUN):
+        _p = d.decide(m(events=_ev), d._tm("14:16"), live(soc=32, pv=_pv), OPTS)
+        assert _p["mode"] == d.MODE_CLOSED, (_ev, _pv, _p)
 
 # Solar sell and the ceiling never touch the mode.
 posted.clear()
