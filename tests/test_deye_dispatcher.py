@@ -30,84 +30,88 @@ EXPORT_ON  = [{"time": "00:00", "export": True,  "charge_amps": 40}]
 EXPORT_OFF = [{"time": "00:00", "export": False, "charge_amps": 40}]
 
 
-# ── 1. Surplus is measured from the power balance, not the clock ─────────────
-# surplus = -(battery + grid): what is charging the pack plus what is leaving.
-assert d.surplus_w(live(batt=-1300, grid=0)) == 1300, "charging 1.3 kW is 1.3 kW of surplus"
-assert d.surplus_w(live(batt=0, grid=-2000)) == 2000, "exporting counts as surplus"
-assert d.surplus_w(live(batt=0, grid=200)) == -200, "importing is a deficit"
-assert d.surplus_w(live(batt=24110, grid=-26627)) == 2517  # the drain, mid-incident
+SUN = 6000          # PV that counts as daylight
+DARK = 0
 
-# ── 2. Hold/release has hysteresis so it cannot flap ─────────────────────────
-assert d.hold_pack(live(batt=-1300), previous=None) is True
-assert d.hold_pack(live(grid=500), previous=True) is False, "importing releases the pack"
-# Between the thresholds the previous answer stands.
-mid = live(batt=-100)          # surplus 100 W, between RELEASE_BELOW_W and HOLD_ABOVE_W
-assert 0 < d.surplus_w(mid) < d.HOLD_ABOVE_W
-assert d.hold_pack(mid, previous=True)  is True
-assert d.hold_pack(mid, previous=False) is False
-assert d.hold_pack(mid, previous=None)  is False, "no history defaults to the house"
+# ── 1. Carrying the house: nothing sold, pack on the load ───────────────────
+# power 0 is what stops the battery being sold; the mode stays Selling First
+# throughout, so power is the only thing standing between plan and grid.
+ev_bank = [{"time": "00:00", "export": False, "charge_amps": 40}]
+plan = d.decide(m(events=ev_bank), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
+assert plan["power"] == 0, "no sale means no slot power"
+assert plan["target"] == 15, "batt_min, so the pack runs the load"
+assert plan["charge_a"] == 40, "and banks the surplus"
+assert plan["reason"] == "carrying the house"
 
-# ── 3. The gate is the work mode, never the sell bit ─────────────────────────
-# Established on hardware: all six sell bits cleared, mode left open and a
-# target below SoC, and the plant exported 24 kW off the battery at night.
-# So every state must be safe on the MODE alone.
-def unsafe(p):
-    """Gate open while the target could draw on the battery, outside a window."""
-    return p["mode_on"] and not p["reason"].startswith("window") and p["target"] < 80
+# ── 2. Selling solar: power 0, target ABOVE SoC, charge throttled ───────────
+ev_solar = [{"time": "00:00", "export": True, "charge_amps": 1}]
+plan = d.decide(m(events=ev_solar), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
+assert plan["reason"] == "selling solar surplus"
+assert plan["power"] == 0, "the pack must not be sold"
+assert plan["target"] == 100, "above SoC, so it cannot feed the sale either"
+assert plan["charge_a"] == 1, "and cannot absorb the surplus"
 
-for hour in ("00:00", "03:00", "09:00", "12:00", "17:00", "21:00", "23:30"):
-    for l in (live(soc=95, batt=-3000), live(soc=95, grid=500), live(soc=40, grid=200),
-              live(soc=20, batt=100), live(soc=100, batt=-5000, pv=6000)):
-        for mp in (m(events=EXPORT_ON), m(events=EXPORT_OFF)):
-            plan = d.decide(mp, d._tm(hour), l, OPTS, None)
-            assert not unsafe(plan), (hour, l, plan)
+# After dark the same signals must NOT raise the target — that is the grid
+# trickle this whole model replaced.
+plan = d.decide(m(events=ev_solar), d._tm("23:00"), live(soc=80, pv=DARK), OPTS)
+assert plan["target"] == 15, "no sun, so the pack stays on the house"
+assert plan["reason"] == "carrying the house"
 
-# Outside a window the gate opens only to sell surplus, and only with the
-# target at or above where the pack already sits.
-plan = d.decide(m(events=EXPORT_ON), d._tm("12:00"), live(soc=80, batt=-2000), OPTS, None)
-assert plan["mode_on"] is True and plan["reason"] == "selling solar surplus"
-assert plan["target"] >= 80, "the pack must not be the source"
+# Price below threshold is not a solar sale either, however bright it is.
+plan = d.decide(m(events=ev_bank), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
+assert plan["target"] == 15 and plan["power"] == 0
 
-# No surplus → gate shut, pack on the house.
-plan = d.decide(m(events=EXPORT_ON), d._tm("23:00"), live(soc=80, grid=400), OPTS, True)
-assert plan["mode_on"] is False and plan["target"] == 15
+# ── 2b. The sell bit rides with the slot power ──────────────────────────────
+# Measured: 30 kW of slot power against a target 8 points below SoC sold nothing
+# until the bit went on, then 16 kW flowed within seconds. So the bit is required
+# even in Selling First, and clearing it is what keeps the pack out of a solar
+# sale.
+_solar = d.decide(m(events=ev_solar), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
+assert d.desired_slots(_solar, OPTS)[0]["sell"] is False, "solar sale must not arm the bit"
+_house = d.decide(m(events=ev_bank), d._tm("12:00"), live(soc=80, pv=SUN), OPTS)
+assert d.desired_slots(_house, OPTS)[0]["sell"] is False
 
-# Price below threshold → gate shut regardless of surplus.
-plan = d.decide(m(events=EXPORT_OFF), d._tm("12:00"), live(soc=90, batt=-3000), OPTS, None)
-assert plan["mode_on"] is False
+# ── 3. Selling the battery: high power, low target, both from the map ───────
+win = m(windows=[("20:00", "22:00", 17)], events=ev_solar, sell_kw=27.0)
+plan = d.decide(win, d._tm("21:00"), live(soc=80, pv=DARK), OPTS)
+assert plan["reason"] == "window: selling the battery"
+assert plan["power"] == 27000, "the map's sell power"
+assert plan["target"] == 17, "and the window's own floor"
+assert all(s["sell"] is True for s in d.desired_slots(plan, OPTS)), \
+    "a battery sale arms the bit on every slot"
 
-# ── 3b. Outside a window the battery is never sold ───────────────────────────
-# A good price at night with the house drawing must not open the gate.
-plan = d.decide(m(events=EXPORT_ON), d._tm("03:00"), live(soc=95, grid=300), OPTS, None)
-assert plan["mode_on"] is False and plan["target"] == 15
-assert plan["solar_sell"] is True, "solar sell still tracks the price on its own"
+off = m(windows=[("20:00", "22:00", 17)], events=ev_bank)
+assert d.decide(off, d._tm("21:00"), live(soc=80), OPTS)["power"] == 0, \
+    "a window under the price threshold sells nothing"
+assert d.decide(win, d._tm("19:00"), live(soc=80, pv=DARK), OPTS)["power"] == 0, \
+    "outside its hours the window is inert"
 
-# ── 4. Inside a window the battery sells to the plan's floor ─────────────────
-win = m(windows=[("20:00", "22:00", 17)], events=EXPORT_ON)
-plan = d.decide(win, d._tm("21:00"), live(soc=80), OPTS, None)
-assert plan["mode_on"] is True and plan["target"] == 17 and plan["sell"] is True
+# ── 4. The SoC guard is a backstop, not an early stop ───────────────────────
+# The planner's tou_floor_margin is set so a window runs out of time before it
+# runs out of charge; withholding above the floor would eat that margin.
+assert d.decide(win, d._tm("21:00"), live(soc=18, pv=DARK), OPTS)["power"] == 27000, \
+    "one point above the floor must still sell"
+assert d.decide(win, d._tm("21:00"), live(soc=17, pv=DARK), OPTS)["power"] == 0, \
+    "at the floor it stops"
+assert d.decide(win, d._tm("21:00"), live(soc=10, pv=DARK), OPTS)["power"] == 0
 
-# ...but only while the price says so.
-off = m(windows=[("20:00", "22:00", 17)], events=EXPORT_OFF)
-plan = d.decide(off, d._tm("21:00"), live(soc=80), OPTS, None)
-assert plan["mode_on"] is False, "a window with the price below threshold sells nothing"
-
-# Outside its hours the same window is inert.
-plan = d.decide(win, d._tm("19:00"), live(soc=80, batt=-500), OPTS, None)
-assert plan["reason"] != "window: selling the battery"
-
-# ── 5. The SoC guard stops a drain at the floor ──────────────────────────────
-plan = d.decide(win, d._tm("21:00"), live(soc=18), OPTS, None)
-assert plan["mode_on"] is False, "18% is within the margin of a 17% floor — gate shuts"
-plan = d.decide(win, d._tm("21:00"), live(soc=20), OPTS, None)
-assert plan["mode_on"] is True, "20% is clear of it"
+# ── 5. Sell power comes from the map, capped by the plant limit ─────────────
+capped = dict(OPTS, max_sell_power_w=20000)
+assert d.decide(win, d._tm("21:00"), live(soc=80), capped)["power"] == 20000
+w10 = m(windows=[("20:00", "22:00", 17)], events=ev_solar, sell_kw=10.0)
+assert d.decide(w10, d._tm("21:00"), live(soc=80), capped)["power"] == 10000, \
+    "a cap never raises a lower plan"
 
 # ── 6. Floors are clamped into the planner's envelope ────────────────────────
 deep = m(windows=[("20:00", "22:00", 5)], events=EXPORT_ON, lo=15, hi=90)
-assert d.decide(deep, d._tm("21:00"), live(soc=80), OPTS, None)["target"] == 15, \
+assert d.decide(deep, d._tm("21:00"), live(soc=80), OPTS)["target"] == 15, \
     "a floor under batt_min must clamp up to it"
-assert d.decide(m(events=EXPORT_ON, lo=15, hi=90), d._tm("12:00"),
-                live(batt=-2000), OPTS, None)["target"] == 90, "holding uses soft max"
+high = m(windows=[("20:00", "22:00", 95)], events=EXPORT_ON, lo=15, hi=90)
+assert d.decide(high, d._tm("21:00"), live(soc=80), OPTS)["target"] == 90, \
+    "and a floor above soft max must clamp down to it"
+assert d.decide(m(events=ev_solar, lo=15, hi=90), d._tm("12:00"),
+                live(soc=50, pv=SUN), OPTS)["target"] == 90, \
+    "a solar sale raises the target to soft max, not a hardcoded 100"
 
 # ── 7. Windows wrap past midnight ────────────────────────────────────────────
 tail = m(windows=[("24:15", "25:00", 17)], events=EXPORT_ON)
@@ -123,18 +127,12 @@ assert d.active_window(straddle["tou_slots"], d._tm("12:00")) is None
 many = m(windows=[(f"{h:02d}:00", f"{h:02d}:30", 17) for h in range(0, 24, 2)],
          events=EXPORT_ON)
 assert len(many["tou_slots"]) == 12
-assert d.decide(many, d._tm("08:15"), live(soc=80), OPTS, None)["target"] == 17
-assert d.decide(many, d._tm("08:45"), live(soc=80, batt=-900), OPTS, None)["target"] >= 80
+assert d.decide(many, d._tm("08:15"), live(soc=80), OPTS)["power"] > 0
+assert d.decide(many, d._tm("08:45"), live(soc=80, pv=DARK), OPTS)["power"] == 0
 
 # ── 8. Charge current: restored outside windows, split, capped ───────────────
 ev = [{"time": "00:00", "export": True, "charge_amps": 40},
       {"time": "10:00", "charge_amps": 1}]          # throttled because it expects to sell
-plan = d.decide(m(events=ev), d._tm("11:00"), live(soc=80, grid=400), OPTS, None)
-assert plan["charge_a"] == 40, "not selling here, so the throttle would only waste solar"
-plan = d.decide(m(windows=[("10:00", "12:00", 17)], events=ev),
-                d._tm("11:00"), live(soc=80), OPTS, None)
-assert plan["charge_a"] == 1, "inside a window the plan's throttle stands"
-
 assert d._per_bat(40, 1) == 40 and d._per_bat(40, 2) == 20
 assert d._per_bat(80, 1, 40) == 40, "a cap must protect a smaller pack"
 assert d._per_bat(30, 1, 40) == 30, "and never raise a smaller request"
@@ -146,12 +144,12 @@ assert d.resolve_battery_count({"battery_count": 2}, zona) == 2
 
 # ── 9. The sell ceiling follows the plan, capped by the plant limit ──────────
 assert d.decide(m(events=EXPORT_ON, sell_kw=27.0), d._tm("12:00"),
-                live(), OPTS, None)["ceiling"] == 27000
+                live(), OPTS)["ceiling"] == 27000
 capped = dict(OPTS, max_sell_power_w=20000)
 assert d.decide(m(events=EXPORT_ON, sell_kw=27.0), d._tm("12:00"),
-                live(), capped, None)["ceiling"] == 20000, "the plant limit wins"
+                live(), capped)["ceiling"] == 20000, "the plant limit wins"
 assert d.decide(m(events=EXPORT_ON, sell_kw=10.0), d._tm("12:00"),
-                live(), capped, None)["ceiling"] == 10000, "and never raises a lower plan"
+                live(), capped)["ceiling"] == 10000, "and never raises a lower plan"
 
 # ── 10. All six slots identical, on fixed times, and verified after writing ──
 posted = []
@@ -161,7 +159,7 @@ fake_fw = {"tou": {"slots": [{"slot": n, "time": "00:00", "soc_pct": 0, "sell": 
 d._post = lambda url, path, body, dry: posted.append((path, body))
 d._get  = lambda url, path, attempts=3: fake_fw
 
-plan = d.decide(win, d._tm("21:00"), live(soc=80), OPTS, None)
+plan = d.decide(win, d._tm("21:00"), live(soc=80), OPTS)
 
 # A write that never lands must report itself as unverified, not silently pass.
 wrote, verified = d.sync_slots(plan, fake_fw["tou"], OPTS, "http://x", False)
@@ -188,21 +186,21 @@ assert all(s["grid_charge"] is False and s["gen_charge"] is False for s in body)
 posted.clear()
 assert d.sync_slots(plan, fake_fw["tou"], OPTS, "http://x", False) == (False, True), posted
 
-# ── 11. The gate is written on its own, so ordering is the caller's ──────────
+# ── 11. The work mode is a pinned invariant, never a control ────────────────
 posted.clear()
-assert d.sync_mode(True,  {"limit_control": "Selling First"}, "http://x", False) is False
-assert d.sync_mode(True,  {"limit_control": "Zero Export to CT"}, "http://x", False) is True
+assert d.pin_mode({"limit_control": "Selling First"}, "http://x", False) is False, \
+    "already pinned: nothing to write"
+assert d.pin_mode({"limit_control": "Zero Export to CT"}, "http://x", False) is True, \
+    "anything else gets pulled back"
 assert posted[-1][1] == {"limit_control": "Selling First"}
-assert d.sync_mode(False, {"limit_control": "Selling First"}, "http://x", False) is True
-assert posted[-1][1] == {"limit_control": "Zero Export to CT"}
 
-# Solar sell and the ceiling never touch the gate.
+# Solar sell and the ceiling never touch the mode.
 posted.clear()
 gen_ok = {"solar_sell_enable": True, "max_sell_power_w": 27000}
 assert d.sync_general(dict(plan, ceiling=27000, solar_sell=True), gen_ok, "http://x", False) is False
 assert d.sync_general(dict(plan, ceiling=27000, solar_sell=False), gen_ok, "http://x", False) is True
 assert posted[-1][1] == {"solar_sell_enable": False}
-assert all("limit_control" not in b for _, b in posted), "the gate is sync_mode's alone"
+assert all("limit_control" not in b for _, b in posted[1:]), "the mode is pin_mode's alone"
 
 # ── 12. Clock skew is caught against the NEWEST map ─────────────────────────
 # The map's times are the planner's local time. A host in a different timezone
