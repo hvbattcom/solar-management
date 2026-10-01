@@ -120,6 +120,11 @@ def read_fw(api_url: str) -> dict:
         return json.loads(r.read())
 
 
+def auto_managed(api_url: str) -> bool:
+    with urllib.request.urlopen(f"{api_url}/api/auto-managed", timeout=10) as r:
+        return bool(json.loads(r.read()).get("enabled", True))
+
+
 # ── HTTP post ─────────────────────────────────────────────────────────────────
 
 def _post(api_url: str, path: str, body: dict | list, dry_run: bool) -> None:
@@ -434,6 +439,22 @@ def main() -> None:
         show_map(m, now_min); return
 
     log.info("run at %s", _fmt(now_min))
+
+    # ── Auto-management switch ────────────────────────────────────────────────
+    # Off means someone is driving the inverter by hand: stand down. The cached
+    # fingerprint is dropped so the first run after switching back on reads the
+    # firmware and re-applies the plan over whatever was changed manually.
+    try:
+        managed = auto_managed(cfg["api_url"])
+    except Exception as e:
+        log.error("cannot read auto-management flag: %s", e); sys.exit(1)
+    if not managed:
+        log.info("auto-management is off — not dispatching")
+        if not args.dry_run:
+            state = load_state()
+            if state.get("fingerprint") or state.get("pending"):
+                save_state({**state, "fingerprint": None, "pending": None})
+        return
 
     tou_slots   = m.get("tou_slots", [])
     events      = m.get("events", [])
