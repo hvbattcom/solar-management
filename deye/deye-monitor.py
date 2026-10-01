@@ -37,18 +37,18 @@ REGISTER_DEFINITIONS = {
     0x02A9: {'name': 'PV3 Current',         'scale': 0.1, 'unit': 'A',   'group': 'solar',    'signed': False},
     0x02AA: {'name': 'PV4 Voltage',         'scale': 0.1, 'unit': 'V',   'group': 'solar',    'signed': False},
     0x02AB: {'name': 'PV4 Current',         'scale': 0.1, 'unit': 'A',   'group': 'solar',    'signed': False},
-    0x0211: {'name': 'Daily Production',    'scale': 0.1, 'unit': 'kWh', 'group': 'solar',    'signed': False},
-    0x0216: {'name': 'Total Production Low','scale': 0.1, 'unit': 'kWh', 'group': 'solar',    'signed': False},
-    0x0217: {'name': 'Total Production High','scale': 0.1,'unit': 'kWh', 'group': 'solar',    'signed': False},
+    0x0211: {'name': 'Daily Production',    'scale': 1, 'unit': 'kWh', 'group': 'solar',    'signed': False},
+    0x0216: {'name': 'Total Production Low','scale': 1, 'unit': 'kWh', 'group': 'solar',    'signed': False},
+    0x0217: {'name': 'Total Production High','scale': 1,'unit': 'kWh', 'group': 'solar',    'signed': False},
 
     0x006C: {'name': 'Battery Max A Charge',    'scale': 1,   'unit': 'A',   'group': 'battery',  'signed': False},
     0x006D: {'name': 'Battery Max A Discharge', 'scale': 1,   'unit': 'A',   'group': 'battery',  'signed': False},
-    0x0202: {'name': 'Daily Battery Charge',    'scale': 0.1, 'unit': 'kWh', 'group': 'battery',  'signed': False},
-    0x0203: {'name': 'Daily Battery Discharge', 'scale': 0.1, 'unit': 'kWh', 'group': 'battery',  'signed': False},
-    0x0204: {'name': 'Total Battery Charge Low',    'scale': 0.1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
-    0x0205: {'name': 'Total Battery Charge High',   'scale': 0.1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
-    0x0206: {'name': 'Total Battery Discharge Low', 'scale': 0.1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
-    0x0207: {'name': 'Total Battery Discharge High','scale': 0.1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
+    0x0202: {'name': 'Daily Battery Charge',    'scale': 1, 'unit': 'kWh', 'group': 'battery',  'signed': False},
+    0x0203: {'name': 'Daily Battery Discharge', 'scale': 1, 'unit': 'kWh', 'group': 'battery',  'signed': False},
+    0x0204: {'name': 'Total Battery Charge Low',    'scale': 1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
+    0x0205: {'name': 'Total Battery Charge High',   'scale': 1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
+    0x0206: {'name': 'Total Battery Discharge Low', 'scale': 1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
+    0x0207: {'name': 'Total Battery Discharge High','scale': 1, 'unit': 'kWh', 'group': 'battery', 'signed': False},
     0x024A: {'name': 'Battery Temperature', 'scale': 0.1, 'unit': '°C', 'group': 'battery', 'signed': False, 'offset': 1000},
     0x024B: {'name': 'Battery Voltage',     'scale': 0.1, 'unit': 'V',  'group': 'battery', 'signed': False},
     0x024C: {'name': 'Battery SOC',         'scale': 1,   'unit': '%',  'group': 'battery', 'signed': False},
@@ -62,12 +62,12 @@ REGISTER_DEFINITIONS = {
     0x0269: {'name': 'External CT L2 Power', 'scale': 1,   'unit': 'W', 'group': 'grid', 'signed': True},
     0x026A: {'name': 'External CT L3 Power', 'scale': 1,   'unit': 'W', 'group': 'grid', 'signed': True},
     0x0271: {'name': 'Total Grid Power',     'scale': 1,   'unit': 'W', 'group': 'grid', 'signed': True},
-    0x0208: {'name': 'Daily Energy Bought',        'scale': 0.1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
-    0x020A: {'name': 'Total Energy Bought Low',    'scale': 0.1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
-    0x020B: {'name': 'Total Energy Bought High',   'scale': 0.1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
-    0x0209: {'name': 'Daily Energy Sold',          'scale': 0.1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
-    0x020C: {'name': 'Total Energy Sold Low',      'scale': 0.1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
-    0x020D: {'name': 'Total Energy Sold High',     'scale': 0.1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
+    0x0208: {'name': 'Daily Energy Bought',        'scale': 1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
+    0x020A: {'name': 'Total Energy Bought Low',    'scale': 1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
+    0x020B: {'name': 'Total Energy Bought High',   'scale': 1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
+    0x0209: {'name': 'Daily Energy Sold',          'scale': 1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
+    0x020C: {'name': 'Total Energy Sold Low',      'scale': 1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
+    0x020D: {'name': 'Total Energy Sold High',     'scale': 1, 'unit': 'kWh', 'group': 'grid', 'signed': False},
 
     # Deye "Load" = EPS/backup output (same physical role as Solis "Backup")
     0x028A: {'name': 'Load L1 Power',    'scale': 1,   'unit': 'W', 'group': 'load', 'signed': True},
@@ -77,9 +77,9 @@ REGISTER_DEFINITIONS = {
     0x0284: {'name': 'Load Voltage L1',  'scale': 0.1, 'unit': 'V', 'group': 'load', 'signed': False},
     0x0285: {'name': 'Load Voltage L2',  'scale': 0.1, 'unit': 'V', 'group': 'load', 'signed': False},
     0x0286: {'name': 'Load Voltage L3',  'scale': 0.1, 'unit': 'V', 'group': 'load', 'signed': False},
-    0x020E: {'name': 'Daily Load Consumption',        'scale': 0.1, 'unit': 'kWh', 'group': 'load', 'signed': False},
-    0x020F: {'name': 'Total Load Consumption Low',    'scale': 0.1, 'unit': 'kWh', 'group': 'load', 'signed': False},
-    0x0210: {'name': 'Total Load Consumption High',   'scale': 0.1, 'unit': 'kWh', 'group': 'load', 'signed': False},
+    0x020E: {'name': 'Daily Load Consumption',        'scale': 1, 'unit': 'kWh', 'group': 'load', 'signed': False},
+    0x020F: {'name': 'Total Load Consumption Low',    'scale': 1, 'unit': 'kWh', 'group': 'load', 'signed': False},
+    0x0210: {'name': 'Total Load Consumption High',   'scale': 1, 'unit': 'kWh', 'group': 'load', 'signed': False},
 
     0x0276: {'name': 'Current L1',       'scale': 0.01, 'unit': 'A', 'group': 'inverter', 'signed': True},
     0x0277: {'name': 'Current L2',       'scale': 0.01, 'unit': 'A', 'group': 'inverter', 'signed': True},
@@ -205,10 +205,10 @@ def _bulk_read(ip: str, sn: int, port: int = 8899, verbose: bool = False) -> dic
     inv.disconnect()
     return data
 
-def _calc_32bit(low, high) -> float:
+def _calc_32bit(low, high) -> int:
     low  = int(low  or 0) & 0xFFFF
     high = int(high or 0) & 0xFFFF
-    return ((high << 16) | low) * 0.1
+    return (high << 16) | low
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -238,6 +238,7 @@ def load_config(path: Path = None) -> dict:
         "verbose":        sec.getboolean("verbose", fallback=False),
         "inverter_power_w": sec.getfloat("inverter_power_kw", fallback=8.0) * 1000.0,
         "selling_enabled": sec.getboolean("selling_enabled", fallback=False),
+        "energy_scale_kwh": sec.getfloat("energy_scale_kwh", fallback=1.0),
     }
 
 # ── Numeric helpers ───────────────────────────────────────────────────────────
@@ -400,19 +401,27 @@ def build_context(raw: dict, cfg: dict) -> dict:
     bat_dir = _bat_direction(bat_pwr)
 
     # ── Energy counters ───────────────────────────────────────────────────────
-    daily_pv     = get(0x0211)
-    daily_load   = get(0x020E)
-    daily_import = get(0x0208)
-    daily_export = get(0x0209)
-    daily_chg    = get(0x0202)
-    daily_dis    = get(0x0203)
+    # Counter resolution depends on firmware: 0.1 kWh on older releases, 1 kWh
+    # since the 2026-08 update (energy_scale_kwh in config).
+    e_scale = cfg.get("energy_scale_kwh", 1.0)
+    def kwh(reg: int) -> float:
+        return get(reg) * e_scale
+    def kwh32(lo: int, hi: int) -> float:
+        return _calc_32bit(raw.get(lo), raw.get(hi)) * e_scale
 
-    total_pv     = _calc_32bit(raw.get(0x0216), raw.get(0x0217))
-    total_load   = _calc_32bit(raw.get(0x020F), raw.get(0x0210))
-    total_import = _calc_32bit(raw.get(0x020A), raw.get(0x020B))
-    total_export = _calc_32bit(raw.get(0x020C), raw.get(0x020D))
-    total_chg    = _calc_32bit(raw.get(0x0204), raw.get(0x0205))
-    total_dis    = _calc_32bit(raw.get(0x0206), raw.get(0x0207))
+    daily_pv     = kwh(0x0211)
+    daily_load   = kwh(0x020E)
+    daily_import = kwh(0x0208)
+    daily_export = kwh(0x0209)
+    daily_chg    = kwh(0x0202)
+    daily_dis    = kwh(0x0203)
+
+    total_pv     = kwh32(0x0216, 0x0217)
+    total_load   = kwh32(0x020F, 0x0210)
+    total_import = kwh32(0x020A, 0x020B)
+    total_export = kwh32(0x020C, 0x020D)
+    total_chg    = kwh32(0x0204, 0x0205)
+    total_dis    = kwh32(0x0206, 0x0207)
 
     # ── TOU ───────────────────────────────────────────────────────────────────
     grid_chg_en   = int(get(130))  != 0
