@@ -41,7 +41,8 @@ d._post        = _post
 d.read_fw      = lambda url: json.loads(json.dumps(fw))
 d.get_soc      = lambda url, inst: soc["now"]
 d.auto_managed = lambda url: True
-d.load_config  = lambda p: {"api_url": "http://stub", "prom_url": "http://stub"}
+cfg = {"api_url": "http://stub", "prom_url": "http://stub", "soc_guard_margin_pct": 1.0}
+d.load_config  = lambda p: cfg
 d._STATE_FILE  = Path(tempfile.mkdtemp()) / "dispatcher_state.json"
 
 current_map = {"m": MAP}
@@ -66,7 +67,9 @@ assert run("07:05", 60) == [], "nothing changed — no write"
 
 # ── Guard shuts the active window ─────────────────────────────────────────────
 
-assert run("07:40", 19), "SoC 19 ≤ floor 17 + 2 — guard must write"
+assert run("07:35", 19) == [], "SoC 19 > floor 17 + 1 — guard holds off"
+assert enabled("07:30")
+assert run("07:40", 18), "SoC 18 ≤ floor 17 + 1 — guard must write"
 assert not enabled("07:30"), "the active window is shut"
 assert enabled("17:45"), "a later window is untouched"
 
@@ -89,6 +92,14 @@ assert run("17:55", 25) == []
 
 state = json.loads(d._STATE_FILE.read_text())
 assert state["soc_latched"] == ["07:30-08:30", "17:45-18:00"], state["soc_latched"]
+
+# ── Below the floor fires too, and the margin comes from config ─────────────
+
+assert d.soc_guard(MAP["tou_slots"], d._tm("07:40"), 15, set()) == {"07:30-08:30"}, \
+    "SoC below the floor must fire"
+assert d.soc_guard(MAP["tou_slots"], d._tm("07:40"), 19, set(), margin=2) == {"07:30-08:30"}
+assert d.soc_guard(MAP["tou_slots"], d._tm("07:40"), 18, set(), margin=0) == set()
+assert d.soc_guard(MAP["tou_slots"], d._tm("09:00"), 5, set()) == set(), "outside any window"
 
 # ── A new day's map starts with no latch ──────────────────────────────────────
 

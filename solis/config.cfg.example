@@ -49,3 +49,7 @@ port = 5000
 # battery_soc_pct from it for the SoC guard; leave empty to run without the
 # guard, in which case the plan is applied without checking the real SoC.
 mothership_prometheus_api =
+
+# SoC guard: shut a discharge window once SoC is at or within this many points
+# of the window's floor (default 1). Needs mothership_prometheus_api.
+soc_guard_margin_pct = 1
