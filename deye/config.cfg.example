@@ -15,6 +15,11 @@ inverter_power_kw = 30.0
 # Enable verbose logging for debugging (true/false)
 verbose = false
 
+# kWh per raw count of the energy counters (daily/total PV, load, grid, battery).
+# Deye firmware from 2026-08 onwards reports whole kWh (1); older firmware
+# reports tenths (0.1). If the kWh figures are 10x off, flip this.
+energy_scale_kwh = 1
+
 # Whether this plant sells energy back to the grid -- purely informational,
 # exposed as plant_feature_enabled{feature="selling"} for dashboards to key
 # panel visibility off of (e.g. hide price panels on self-consumption-only
