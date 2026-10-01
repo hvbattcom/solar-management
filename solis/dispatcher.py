@@ -6,7 +6,8 @@ Each run:
   1. Derive desired export + charge state from all past map events
   2. Sync TOU discharge slots (randomised slot assignment to spread EEPROM wear)
   3. Apply export / charge_amps if different from firmware
-  4. SoC guard: if inside a TOU discharge window and SoC ≤ floor + 2% → disable slot
+  4. SoC guard: if inside a TOU discharge window and SoC ≤ floor + soc_guard_margin_pct
+     (default 1 %) → shut that window for the rest of the day
 
 All amps values split equally across both batteries (÷2, min 1 A each).
 
@@ -80,6 +81,7 @@ def load_config(path: Path) -> dict:
     return {
         "api_url":  f"http://localhost:{srv.get('port', 5000)}",
         "prom_url": srv.get("mothership_prometheus_api", "").rstrip("/"),
+        "soc_guard_margin_pct": float(srv.get("soc_guard_margin_pct", SOC_GUARD_MARGIN_PCT)),
     }
 
 
@@ -327,12 +329,19 @@ def get_soc(prom_url: str, instance_id: str) -> int | None:
         log.warning("soc: prometheus unreachable (%s)", e); return None
 
 
+# The guard shuts a window once SoC is within this many points of its floor.
+# The inverter's own floors are not relied on: below the battery minimum it
+# force-charges from the grid. Five minutes between runs is short next to the
+# time a point of SoC takes to drain, so one point is enough headroom.
+SOC_GUARD_MARGIN_PCT = 1.0
+
 def _window_key(sl: dict) -> str:
     return f"{sl['start']}-{sl['end']}"
 
 def soc_guard(tou_slots: list, now_min: int, soc: int | None,
-              latched: set) -> set:
-    """Windows to shut because the pack is within 2 % of their floor.
+              latched: set, margin: float = SOC_GUARD_MARGIN_PCT) -> set:
+    """Windows to shut because the pack is at, below, or within `margin`
+    points of their floor.
 
     The guard only decides; sync_tou writes the slots. A shut window is
     latched for the rest of the map's day — releasing it as soon as SoC
@@ -346,9 +355,9 @@ def soc_guard(tou_slots: list, now_min: int, soc: int | None,
             continue
         if _tm(sl["start"]) <= now_min < _tm(sl["end"]):
             floor = sl["soc_floor_pct"]
-            if soc <= floor + 2:
-                log.warning("soc guard: %d%% ≤ floor %d%% + 2 — shutting window %s "
-                            "for the rest of the day", soc, floor, key)
+            if soc <= floor + margin:
+                log.warning("soc guard: %d%% ≤ floor %d%% + %g — shutting window %s "
+                            "for the rest of the day", soc, floor, margin, key)
                 fired.add(key)
     return fired
 
@@ -484,7 +493,7 @@ def main() -> None:
     # Windows the SoC guard shut earlier on this map's day stay shut.
     latched     = (set(state.get("soc_latched") or [])
                    if state.get("soc_latched_date") == m.get("date") else set())
-    fired       = soc_guard(tou_slots, now_min, soc, latched)
+    fired       = soc_guard(tou_slots, now_min, soc, latched, cfg["soc_guard_margin_pct"])
     plan_hash   = _plan_hash(tou_slots)
     # The latch is part of the fingerprint: when it resets on a new day, the
     # shut windows must be written back on even if the plan is unchanged.
