@@ -148,6 +148,9 @@ def _post(api_url: str, path: str, body: dict | list, dry_run: bool) -> None:
 def _plan_hash(tou_slots: list) -> str:
     return hashlib.sha1(json.dumps(tou_slots, sort_keys=True).encode()).hexdigest()[:10]
 
+def _fingerprint(plan_hash: str, want: dict, latched: set) -> str:
+    return f"{plan_hash}|{json.dumps(want, sort_keys=True)}|{','.join(sorted(latched))}"
+
 def load_state() -> dict:
     return json.loads(_STATE_FILE.read_text()) if _STATE_FILE.exists() else {}
 
@@ -203,7 +206,8 @@ def get_slot_order(tou_slots: list, state: dict) -> list[int]:
     return order
 
 def build_desired_slots(tou_slots: list, slot_order: list[int],
-                        now_min: int | None = None) -> list[dict]:
+                        now_min: int | None = None,
+                        latched: set | None = None) -> list[dict]:
     """Assign plan windows to randomised inverter slot numbers; pad unused to 6.
 
     More than 6 windows cannot fit the hardware.  Windows already fully in
@@ -230,6 +234,12 @@ def build_desired_slots(tou_slots: list, slot_order: list[int],
     # windows in chronological order (wear-leveling still picks random slots).
     active_slots = sorted(slot_order[:len(sorted_tou)])
     for slot_num, sl in zip(active_slots, sorted_tou):
+        if _window_key(sl) in (latched or ()):
+            # Shut by the SoC guard: keep the slot number so no other window
+            # moves, but leave it off for the rest of the day.
+            mapping[slot_num] = {"slot": slot_num, "enabled": False,
+                                 "start": "00:00", "end": "00:00"}
+            continue
         mapping[slot_num] = {
             "slot":      slot_num,
             "enabled":   True,
@@ -317,32 +327,30 @@ def get_soc(prom_url: str, instance_id: str) -> int | None:
         log.warning("soc: prometheus unreachable (%s)", e); return None
 
 
-def _soc_guard_would_fire(tou_slots: list, now_min: int, soc: int | None) -> bool:
-    if soc is None: return False
-    for sl in tou_slots:
-        if _tm(sl["start"]) <= now_min < _tm(sl["end"]):
-            if soc <= sl["soc_floor_pct"] + 2:
-                return True
-    return False
+def _window_key(sl: dict) -> str:
+    return f"{sl['start']}-{sl['end']}"
 
-def soc_guard(tou_slots: list, fw_discharge: list, now_min: int,
-              soc: int | None, api_url: str, dry_run: bool) -> bool:
-    if soc is None: return False
+def soc_guard(tou_slots: list, now_min: int, soc: int | None,
+              latched: set) -> set:
+    """Windows to shut because the pack is within 2 % of their floor.
+
+    The guard only decides; sync_tou writes the slots. A shut window is
+    latched for the rest of the map's day — releasing it as soon as SoC
+    recovered a point made the slot sync re-enable it, the guard shut it
+    again, and the slot flipped every run."""
+    if soc is None: return set()
+    fired = set()
     for sl in tou_slots:
+        key = _window_key(sl)
+        if key in latched:
+            continue
         if _tm(sl["start"]) <= now_min < _tm(sl["end"]):
             floor = sl["soc_floor_pct"]
             if soc <= floor + 2:
-                log.warning("soc guard: %d%% ≤ floor %d%% + 2 — disabling active discharge slot(s)",
-                            soc, floor)
-                for fw in fw_discharge:
-                    if (fw.get("enabled")
-                            and _tm(fw.get("start", "99:00")) <= now_min
-                            < _tm(fw.get("end", "00:00"))):
-                        _post(api_url, f"/api/settings/tou/discharge/{fw['slot']}",
-                              {"enabled": False, "start": "00:00", "end": "00:00"}, dry_run)
-                        log.info("soc guard: slot %d disabled", fw["slot"])
-                return True
-    return False
+                log.warning("soc guard: %d%% ≤ floor %d%% + 2 — shutting window %s "
+                            "for the rest of the day", soc, floor, key)
+                fired.add(key)
+    return fired
 
 
 # ── Show map ─────────────────────────────────────────────────────────────────
@@ -473,11 +481,17 @@ def main() -> None:
 
     # ── Early exit if nothing has changed since last run ──────────────────────
     state       = load_state()
+    # Windows the SoC guard shut earlier on this map's day stay shut.
+    latched     = (set(state.get("soc_latched") or [])
+                   if state.get("soc_latched_date") == m.get("date") else set())
+    fired       = soc_guard(tou_slots, now_min, soc, latched)
     plan_hash   = _plan_hash(tou_slots)
-    fingerprint = f"{plan_hash}|{json.dumps(want, sort_keys=True)}"
+    # The latch is part of the fingerprint: when it resets on a new day, the
+    # shut windows must be written back on even if the plan is unchanged.
+    fingerprint = _fingerprint(plan_hash, want, latched)
     if (not state.get("pending")
             and state.get("fingerprint") == fingerprint
-            and not _soc_guard_would_fire(tou_slots, now_min, soc)):
+            and not fired):
         log.debug("desired state unchanged — skipping firmware read")
         return
 
@@ -499,11 +513,14 @@ def main() -> None:
             state["pending"] = None
 
     # ── SoC guard ─────────────────────────────────────────────────────────────
-    soc_hit = soc_guard(tou_slots, fw_discharge, now_min, soc, cfg["api_url"], args.dry_run)
+    if fired:
+        latched |= fired
+        fingerprint = _fingerprint(plan_hash, want, latched)
+    soc_hit = bool(fired)
 
     # ── TOU slot sync ─────────────────────────────────────────────────────────
     slot_order = get_slot_order(tou_slots, state)
-    desired    = build_desired_slots(tou_slots, slot_order, now_min)
+    desired    = build_desired_slots(tou_slots, slot_order, now_min, latched)
     tou_hit    = sync_tou(desired, tou_slots, fw_discharge, cfg["api_url"], args.dry_run)
 
     # ── Export ────────────────────────────────────────────────────────────────
@@ -532,6 +549,8 @@ def main() -> None:
             "plan_hash":   plan_hash,
             "slot_order":  slot_order,
             "fingerprint": fingerprint,
+            "soc_latched": sorted(latched),
+            "soc_latched_date": m.get("date"),
             "pending":     new_pending or None,
         })
 
