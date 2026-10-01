@@ -237,8 +237,11 @@ auto-management guard that blocks manual writes while the plan is in charge.
   is withheld. Deye stops at the target on its own, so this is a backstop.
 - **Only what changed is written** — the API diffs the 30-register TOU block and writes just
   the differing registers, so a settled day costs no EEPROM cycles.
-- **Auto-management** — while enabled (`/api/auto-managed`), manual writes through the UI
-  and API are refused so they cannot fight the dispatcher.
+- **Auto-management** — the "Auto-managed" switch on the management page
+  (`/api/auto-managed`, on by default) decides who may write. On: the dispatcher applies the
+  plan and manual writes get 403. Off: the dispatcher stands down every run and the API
+  refuses `X-Dispatcher` writes with 409, so a manual setting is never overwritten. The
+  dispatcher cannot flip the switch itself.
 
 ### Configuration
 

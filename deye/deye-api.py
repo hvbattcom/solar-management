@@ -342,9 +342,20 @@ _cfg: dict = {}
 
 
 def _auto_managed() -> bool:
-    if _AUTO_FILE.exists():
-        return json.loads(_AUTO_FILE.read_text()).get("enabled", True)
-    return True
+    """The flag defaults to on: with no file, the plan is in charge."""
+    try:
+        return bool(json.loads(_AUTO_FILE.read_text()).get("enabled", True))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError, AttributeError) as exc:
+        print(f"[auto-managed] unreadable flag file ({exc}) — treating as enabled", flush=True)
+        return True
+
+
+def _set_auto_managed(enabled: bool) -> None:
+    tmp = _AUTO_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"enabled": enabled}))
+    tmp.replace(_AUTO_FILE)
 
 
 @app.get("/")
@@ -359,7 +370,7 @@ def status_page():
 
 @app.get("/api/info")
 def api_info():
-    return jsonify({"brand": "deye", "auto_managed": _auto_managed()})
+    return jsonify({"brand": "deye", "auto_managed": True})
 
 
 def _err(msg: str, code: int = 400):
@@ -371,12 +382,18 @@ def _ok(**extra):
 
 
 def _managed_guard():
-    """Return 403 if auto-management is active and the caller is not the dispatcher."""
-    if not _auto_managed():
-        return None
-    if request.headers.get("X-Dispatcher") == "1":
-        return None  # identified as the automated dispatcher — always allowed
-    return _err("auto-management is active — manual writes are blocked", 403)
+    """Only one side may write at a time. While auto-management is on, the
+    dispatcher (X-Dispatcher: 1) owns the inverter and manual writes get 403.
+    While it is off, the dispatcher's writes get 409, so a cron run that has
+    not noticed the switch still cannot overwrite a manual setting."""
+    from_dispatcher = request.headers.get("X-Dispatcher") == "1"
+    if _auto_managed():
+        if from_dispatcher:
+            return None
+        return _err("auto-management is active — manual writes are blocked", 403)
+    if from_dispatcher:
+        return _err("auto-management is off — dispatcher writes are blocked", 409)
+    return None
 
 
 @app.get("/api/settings")
@@ -545,8 +562,12 @@ def api_get_auto_managed():
 @app.post("/api/auto-managed")
 def api_set_auto_managed():
     data    = request.get_json(silent=True) or {}
-    enabled = bool(data.get("enabled", True))
-    _AUTO_FILE.write_text(json.dumps({"enabled": enabled}))
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        return _err("'enabled' must be true or false")
+    if request.headers.get("X-Dispatcher") == "1":
+        return _err("the dispatcher may not change auto-management", 403)
+    _set_auto_managed(enabled)
     print(f"[auto-managed] {'enabled' if enabled else 'disabled'}", flush=True)
     return _ok()
 

@@ -153,7 +153,7 @@
   }
   .inv button.time-btn:hover { border-color: var(--accent); }
 
-  /* ── Auto-managed switch (Solis only) ── */
+  /* ── Auto-managed switch ── */
   .auto-switch { display:flex; align-items:center; gap:8px; cursor:pointer; color:#fff; user-select:none; }
   .auto-switch input { display:none; }
   .sw-track {
@@ -219,7 +219,7 @@
     </label>
     <button onclick="loadSettings()">↻ Refresh</button>
   </div>
-  <div id="auto-banner">⚙ Dispatcher active — manual edits disabled</div>
+  <div id="auto-banner">⚙ Dispatcher active — manual edits disabled. Switch off Auto-managed to take over.</div>
 
   <div id="main-wrap">
     <div id="auto-overlay"></div>
@@ -917,9 +917,13 @@ async function loadAutoManaged() {
 
 async function setAutoManaged(on) {
   try {
-    await fetch(BASE + '/api/auto-managed', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:on}) });
+    const r = await fetch(BASE + '/api/auto-managed', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:on}) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
     applyAutoMode(on);
-  } catch (e) { flash('general-msg', '✗ ' + e.message, 'err'); }
+  } catch (e) {
+    flash('general-msg', '✗ ' + e.message, 'err');
+    await loadAutoManaged();   // show what the server actually holds
+  }
 }
 
 function applyAutoMode(on) {

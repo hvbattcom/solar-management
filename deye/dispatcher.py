@@ -273,6 +273,10 @@ def read_live(api_url: str) -> dict:
     }
 
 
+def auto_managed(api_url: str) -> bool:
+    return bool(_get(api_url, "/api/auto-managed").get("enabled", True))
+
+
 def _post(api_url: str, path: str, body, dry_run: bool) -> None:
     if dry_run:
         log.info("[dry] POST %-28s  %s", path, json.dumps(body)); return
@@ -527,6 +531,17 @@ def main() -> None:
                   "every window would fire at the wrong hour — fix this host's timezone. "
                   "Refusing to dispatch.", stamp, _now.isoformat(timespec="seconds"), skew)
         sys.exit(1)
+
+    # Off means someone is driving the inverter by hand: stand down before
+    # touching it. The API refuses dispatcher writes then anyway.
+    if not args.show:
+        try:
+            managed = auto_managed(cfg["api_url"])
+        except Exception as e:
+            log.error("cannot read auto-management flag: %s", e); sys.exit(1)
+        if not managed:
+            log.info("auto-management is off — not dispatching")
+            return
 
     try:
         live = read_live(cfg["api_url"])
