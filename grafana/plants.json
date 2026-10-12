@@ -1,0 +1,51 @@
+{
+  "grafana_url": "https://grafana.hvbatt.com",
+  "templates": {
+    "sunpower": {
+      "file": "dashboards/sunpower.json",
+      "source_uid": "18c57e15-4a13-46d1-882b-cdf5353e936c",
+      "title": "Sunpower-{name}"
+    },
+    "management": {
+      "file": "dashboards/management.json",
+      "source_uid": "1a7477e3-96ef-4f4b-9990-37b31b8a7600",
+      "title": "Management-{name}"
+    }
+  },
+  "plants": [
+    {
+      "instance_id": "GS48",
+      "name": "GS48",
+      "sunpower_uid": "sunpower-gs48",
+      "management_uid": "1a7477e3-96ef-4f4b-9990-37b31b8a7600",
+      "api_datasource": "Solis-GS48-API"
+    },
+    {
+      "instance_id": "Zona-28",
+      "name": "Zona-28",
+      "sunpower_uid": "sunpower-zona-28",
+      "management_uid": "273bce51-14c4-42dc-a33e-a414eebade19",
+      "api_datasource": "Deye-Zona-28-API"
+    },
+    {
+      "instance_id": "Krumovi",
+      "name": "Krumovi",
+      "sunpower_uid": "sunpower-krumovi"
+    },
+    {
+      "instance_id": "VIP-AL-07",
+      "name": "VIP-AL-07",
+      "sunpower_uid": "sunpower-vip-al-07"
+    },
+    {
+      "instance_id": "Tishoplast",
+      "name": "Tishoplast",
+      "sunpower_uid": "c0d027a5-c62d-4746-a443-9114c31694c2"
+    },
+    {
+      "instance_id": "Belopoptsi-Villa",
+      "name": "Belopoptsi",
+      "sunpower_uid": "84c2c2c7-d109-4873-82a3-55277f63c3f9"
+    }
+  ]
+}
