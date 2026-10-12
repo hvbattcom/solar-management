@@ -344,18 +344,15 @@ def build_context(raw: dict, cfg: dict) -> dict:
                 (0x0258, 0x0278, 0x027B)]
     inverter_phases = []
     inverter_total  = 0.0
-    inverter_out_raw = 0.0   # unflipped sum (= 0x027C): positive while delivering AC
     for i, (v_r, c_r, p_r) in enumerate(inv_regs):
-        v, c, p_raw = get(v_r), get(c_r), get(p_r)
-        # Raw register reads negative during observed idle/standby states
-        # (PV=0, inverter not actively delivering) while grid import stays
-        # correctly positive elsewhere -- suggests this register's sign is
-        # inverted relative to the intended output-power convention.
-        # Flipped provisionally; needs confirming against real daytime
-        # production data (positive = delivering power) before trusting.
-        p = -p_raw if p_raw is not None else None
+        v, c, p = get(v_r), get(c_r), get(p_r)
+        # The raw register is already positive while the inverter delivers AC
+        # (same convention as Solis) and only goes negative while it draws AC,
+        # e.g. charging the pack from the grid. Their sum equals 0x027C.
+        # Confirmed on a Deye plant: +23.8 kW while the pack discharged 24.7 kW and
+        # 23.9 kW went out to the grid; +140 W at night carrying the house.
+        # (The provisional sign flip from #11 had this backwards.)
         inverter_total += p
-        inverter_out_raw += p_raw
         inverter_phases.append({
             "name":     f"L{i + 1}",
             "voltage":  fmt1(v),
@@ -404,7 +401,7 @@ def build_context(raw: dict, cfg: dict) -> dict:
     # minus what leaves through the Load (backup) port. Checked on a Deye plant
     # against 24 h of history: within -75..0 W even at 25 kW of export.
     # Clamped at 0 -- loads never feed power back.
-    ongrid_feed = max(grid_total + inverter_out_raw - backup_total, 0.0)
+    ongrid_feed = max(grid_total + inverter_total - backup_total, 0.0)
 
     # ── Battery ───────────────────────────────────────────────────────────────
     bat_pwr = get(0x024E)
