@@ -342,14 +342,16 @@ _cfg: dict = {}
 
 
 def _auto_managed() -> bool:
-    """The flag defaults to on: with no file, the plan is in charge."""
+    """The flag defaults to off: with no file (or an unreadable one) nothing
+    external may drive the inverter -- no dispatcher writes, no planner maps.
+    Auto-management has to be switched on deliberately, per plant."""
     try:
-        return bool(json.loads(_AUTO_FILE.read_text()).get("enabled", True))
+        return bool(json.loads(_AUTO_FILE.read_text()).get("enabled", False))
     except FileNotFoundError:
-        return True
+        return False
     except (OSError, ValueError, AttributeError) as exc:
-        print(f"[auto-managed] unreadable flag file ({exc}) — treating as enabled", flush=True)
-        return True
+        print(f"[auto-managed] unreadable flag file ({exc}) — treating as disabled", flush=True)
+        return False
 
 
 def _set_auto_managed(enabled: bool) -> None:
@@ -517,7 +519,10 @@ def api_post_general():
 
 @app.post("/api/map")
 def api_map_receive():
-    """Receive a dispatch map from the solar planner and store it locally."""
+    """Receive a dispatch map from the solar planner and store it locally.
+    Refused while auto-management is off: the planner gets no say then."""
+    if not _auto_managed():
+        return _err("auto-management is off — plan maps are refused", 409)
     data = request.get_json(silent=True)
     if not data or "date" not in data or "instance_id" not in data:
         return _err("JSON body with 'date' and 'instance_id' required")

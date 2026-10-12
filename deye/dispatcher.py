@@ -274,7 +274,7 @@ def read_live(api_url: str) -> dict:
 
 
 def auto_managed(api_url: str) -> bool:
-    return bool(_get(api_url, "/api/auto-managed").get("enabled", True))
+    return bool(_get(api_url, "/api/auto-managed").get("enabled", False))
 
 
 def _post(api_url: str, path: str, body, dry_run: bool) -> None:
