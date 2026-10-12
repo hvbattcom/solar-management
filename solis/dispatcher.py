@@ -124,7 +124,7 @@ def read_fw(api_url: str) -> dict:
 
 def auto_managed(api_url: str) -> bool:
     with urllib.request.urlopen(f"{api_url}/api/auto-managed", timeout=10) as r:
-        return bool(json.loads(r.read()).get("enabled", True))
+        return bool(json.loads(r.read()).get("enabled", False))
 
 
 # ── HTTP post ─────────────────────────────────────────────────────────────────

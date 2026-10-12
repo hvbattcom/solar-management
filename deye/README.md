@@ -238,10 +238,12 @@ auto-management guard that blocks manual writes while the plan is in charge.
 - **Only what changed is written** — the API diffs the 30-register TOU block and writes just
   the differing registers, so a settled day costs no EEPROM cycles.
 - **Auto-management** — the "Auto-managed" switch on the management page
-  (`/api/auto-managed`, on by default) decides who may write. On: the dispatcher applies the
-  plan and manual writes get 403. Off: the dispatcher stands down every run and the API
-  refuses `X-Dispatcher` writes with 409, so a manual setting is never overwritten. The
-  dispatcher cannot flip the switch itself.
+  (`/api/auto-managed`, **off by default**: no `auto_managed.json`, or an unreadable one, means
+  off) decides who may write. On: the dispatcher applies the plan and manual writes get 403.
+  Off: nothing external drives the inverter — the dispatcher stands down every run, the API
+  refuses `X-Dispatcher` writes with 409 and refuses planner maps (`POST /api/map`) with 409,
+  so a manual setting is never overwritten. The dispatcher cannot flip the switch itself.
+  `auto_managed.json` is per-plant runtime state (git-ignored), like `config.cfg`.
 
 ### Configuration
 
