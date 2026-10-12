@@ -27,6 +27,9 @@ Total Grid Power: {{ grid_power_w }}W ({{ grid_direction }})  [{{ grid_power_pct
 {% endfor %}-------------------------
 Total Backup Power: {{ backup_load_power_w }}W, PF {{ backup_power_factor }}  [{{ backup_power_pct if backup_power_pct is not none else 'NaN' }}% of rated]
 
+=== On-grid Feed ===
+Total On-grid Feed Power: {{ ongrid_feed_power_w if ongrid_feed_power_w is not none else 'NaN' }}W
+
 === Battery Status ===
 Battery: {{ battery_voltage_v }}V, {{ battery_current_a }}A, {{ battery_power_w }}W, {{ battery_temperature_c }}°C, {{ battery_soc_pct }}%, {{ battery_soh_pct }}% ({{ battery_direction }})
 {% if battery2 is not none %}Battery 2: {{ battery2.voltage_v }}V, {{ battery2.current_a }}A, {{ battery2.power_w }}W, {{ battery2.temperature_c }}°C, {{ battery2.soc_pct }}% ({{ battery2.direction }})

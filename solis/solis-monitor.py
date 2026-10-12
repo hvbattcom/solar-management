@@ -1116,6 +1116,9 @@ def build_context(values, cfg):
         "backup_power_pct":       load_pct(backup_total, rated_w),
         "backup_power_factor":       f"{backup_pf:.3f}" if backup_pf is not None else "N/A",
         "backup_power_factor_num":   backup_pf,
+        # AC the inverter feeds to the on-grid side loads (between CT and
+        # inverter) -- on Solis that is the household load register (33147)
+        "ongrid_feed_power_w":    f0s("household_load_power"),
         "battery_soc_pct":        f1s("battery_soc"),
         "battery_soh_pct":        f1s("battery_soh"),
         "battery_voltage_v":      f1s("battery_voltage"),

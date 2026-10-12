@@ -39,6 +39,9 @@
 {% for p in backup_phases %}      {"name": {{ p.name | jv }}, "voltage_v": {{ p.voltage | jv }}, "current_a": {{ p.current | jv }}, "power_w": {{ p.power | jv }}, "load_pct": {{ p.load_pct | jv }}}{{ "," if not loop.last }}
 {% endfor %}    ]
   },
+  "ongrid_feed": {
+    "total_power_w": {{ ongrid_feed_power_w | jv }}
+  },
   "battery": {
     "voltage_v": {{ battery_voltage_v | jv }},
     "current_a": {{ battery_current_a | jv }},
