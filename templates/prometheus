@@ -129,6 +129,10 @@ grid_total_power_pct{brand="{{ brand }}",serial="{{ serial }}"} {{ grid_power_pc
 # TYPE backup_total_active_power_w gauge
 backup_total_active_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_load_power_w }}
 
+# HELP ongrid_feed_total_active_power_w AC power fed by the inverter to the on-grid side loads watts
+# TYPE ongrid_feed_total_active_power_w gauge
+{% if ongrid_feed_power_w is not none %}ongrid_feed_total_active_power_w{brand="{{ brand }}",serial="{{ serial }}"} {{ ongrid_feed_power_w }}
+{% endif %}
 # HELP backup_power_factor Backup output total power factor (active / apparent)
 # TYPE backup_power_factor gauge
 {% if backup_power_factor_num is not none %}backup_power_factor{brand="{{ brand }}",serial="{{ serial }}"} {{ backup_power_factor }}
