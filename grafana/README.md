@@ -55,8 +55,10 @@ run on ilia-vm:
 ./deploy_dashboards.py --config plants-ka6ta.json --url http://localhost:3000 \
     --token-file ~/service_account_token deploy
 ```
-A plant can override its dashboard title with `"sunpower_title"`. The token needs Editor/Admin rights on
-the dashboards, and read access to datasources for the management lookup.
+A plant can override its dashboard title with `"sunpower_title"`.
+
+The token needs Editor/Admin rights on the dashboards, and read access to
+datasources (Prometheus and management lookups).
 
 ## Customer access is never touched
 
