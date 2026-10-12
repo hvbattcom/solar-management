@@ -42,8 +42,20 @@ uid as `__PLANT_API_DATASOURCE_UID__`; the script fills in the datasource that
    ./deploy_dashboards.py --token-file … deploy --plant GS48 --apply
    ```
 
-The token can also come from `GRAFANA_TOKEN`; the URL defaults to `plants.json`
-(override with `--url` or `GRAFANA_URL`). The token needs Editor/Admin rights on
+The token can also come from `GRAFANA_TOKEN`; the URL defaults to the config's
+`grafana_url` (override with `--url` or `GRAFANA_URL`).
+
+**Other Grafanas.** The templates store the Prometheus datasource as
+`__PROMETHEUS_DATASOURCE_UID__`; on deploy it's resolved by name
+(`prometheus_datasource` in the config) in the target Grafana. `--config`
+picks the plant list: `plants.json` is grafana.hvbatt.com (the customers),
+`plants-ka6ta.json` is the home Grafana (instance `Home`, dashboard `Sunpower`),
+run on ilia-vm:
+```bash
+./deploy_dashboards.py --config plants-ka6ta.json --url http://localhost:3000 \
+    --token-file ~/service_account_token deploy
+```
+A plant can override its dashboard title with `"sunpower_title"`. The token needs Editor/Admin rights on
 the dashboards, and read access to datasources for the management lookup.
 
 ## Customer access is never touched

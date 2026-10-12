@@ -1,5 +1,6 @@
 {
   "grafana_url": "https://grafana.hvbatt.com",
+  "prometheus_datasource": "prometheus",
   "templates": {
     "sunpower": {
       "file": "dashboards/sunpower.json",

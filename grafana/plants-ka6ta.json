@@ -1,0 +1,22 @@
+{
+  "grafana_url": "https://grafana.ka6ta.eu",
+  "prometheus_datasource": "Prometheus",
+  "templates": {
+    "sunpower": {
+      "file": "dashboards/sunpower.json",
+      "title": "Sunpower-{name}"
+    },
+    "management": {
+      "file": "dashboards/management.json",
+      "title": "Management-{name}"
+    }
+  },
+  "plants": [
+    {
+      "instance_id": "Home",
+      "name": "Home",
+      "sunpower_uid": "sunpower",
+      "sunpower_title": "Sunpower"
+    }
+  ]
+}

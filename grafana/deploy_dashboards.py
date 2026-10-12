@@ -13,6 +13,9 @@ Templates
   dashboards/management.json  the Management panel; its API base points at the
                               plant's JSON-API datasource, stored here as
                               __PLANT_API_DATASOURCE_UID__
+  The Prometheus datasource uid is stored as __PROMETHEUS_DATASOURCE_UID__ and
+  resolved by name (config "prometheus_datasource") in the target Grafana, so
+  the same templates deploy to other Grafanas too (--config plants-ka6ta.json).
 
 An existing dashboard is only ever *updated in place*: same uid, same id,
 same folder, saved against its current version. Grafana keeps dashboard
@@ -38,6 +41,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PLACEHOLDER = "__PLANT_API_DATASOURCE_UID__"
+PROM_PLACEHOLDER = "__PROMETHEUS_DATASOURCE_UID__"
 BASE_RE = re.compile(r'(const BASE = "/api/datasources/proxy/uid/)([^"]+)(")')
 
 
@@ -92,6 +96,11 @@ def strip_identity(db: dict) -> dict:
     for k in ("id", "uid", "version"):
         db.pop(k, None)
     return db
+
+
+def swap_uid(db: dict, old: str, new: str) -> dict:
+    """Replace a datasource uid everywhere in a dashboard (JSON round trip)."""
+    return json.loads(json.dumps(db).replace(f'"{old}"', f'"{new}"'))
 
 
 def build_sunpower(tpl: dict, plant: dict, title: str) -> dict:
@@ -150,8 +159,17 @@ def describe_changes(old: dict, new: dict) -> list[str]:
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-def load_cfg() -> dict:
-    return json.loads((HERE / "plants.json").read_text())
+def load_cfg(path: str = "plants.json") -> dict:
+    p = Path(path)
+    return json.loads((p if p.is_absolute() else HERE / p).read_text())
+
+
+def prometheus_uid(g: Grafana, cfg: dict) -> str:
+    name = cfg.get("prometheus_datasource", "prometheus")
+    uid = g.datasource_uid(name)
+    if not uid:
+        sys.exit(f"Prometheus datasource '{name}' not found in {g.url}")
+    return uid
 
 
 def git_rev() -> str:
@@ -167,9 +185,11 @@ def cmd_export(g: Grafana, cfg: dict, _args) -> None:
     db, _ = g.dashboard(t["sunpower"]["source_uid"])
     if db is None:
         sys.exit("sunpower source dashboard not found")
+    prom = prometheus_uid(g, cfg)
     path = HERE / t["sunpower"]["file"]
-    path.write_text(json.dumps(strip_identity(db), indent=2, ensure_ascii=False) + "\n")
-    print(f"exported {db['title']} -> {path.relative_to(HERE)}")
+    path.write_text(json.dumps(swap_uid(strip_identity(db), prom, PROM_PLACEHOLDER),
+                               indent=2, ensure_ascii=False) + "\n")
+    print(f"exported {db['title']} -> {path.relative_to(HERE)} (prometheus uid -> {PROM_PLACEHOLDER})")
 
     db, _ = g.dashboard(t["management"]["source_uid"])
     if db is None:
@@ -184,14 +204,15 @@ def cmd_export(g: Grafana, cfg: dict, _args) -> None:
     if n != 1:
         sys.exit(f"expected exactly one 'const BASE = ...' line in the management panel, found {n}")
     path = HERE / t["management"]["file"]
-    path.write_text(json.dumps(db, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(swap_uid(db, prom, PROM_PLACEHOLDER), indent=2, ensure_ascii=False) + "\n")
     print(f"exported management template -> {path.relative_to(HERE)} (datasource uid -> {PLACEHOLDER})")
 
 
 def cmd_deploy(g: Grafana, cfg: dict, args) -> None:
     t = cfg["templates"]
-    tpl_sp = json.loads((HERE / t["sunpower"]["file"]).read_text())
-    tpl_mg = json.loads((HERE / t["management"]["file"]).read_text())
+    prom = prometheus_uid(g, cfg)
+    tpl_sp = swap_uid(json.loads((HERE / t["sunpower"]["file"]).read_text()), PROM_PLACEHOLDER, prom)
+    tpl_mg = swap_uid(json.loads((HERE / t["management"]["file"]).read_text()), PROM_PLACEHOLDER, prom)
     plants = cfg["plants"]
     if args.plant:
         wanted = set(args.plant)
@@ -203,7 +224,7 @@ def cmd_deploy(g: Grafana, cfg: dict, args) -> None:
     msg = f"deployed by solar-management grafana/deploy_dashboards.py @ {git_rev()}"
     jobs = []
     for p in plants:
-        title = t["sunpower"]["title"].format(**p)
+        title = p.get("sunpower_title") or t["sunpower"]["title"].format(**p)
         jobs.append((p, p.get("sunpower_uid") or f"sunpower-{p['name'].lower()}",
                      build_sunpower(tpl_sp, p, title)))
         if p.get("api_datasource"):
@@ -249,7 +270,9 @@ def cmd_deploy(g: Grafana, cfg: dict, args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--url", help="Grafana base URL (default: GRAFANA_URL or plants.json grafana_url)")
+    ap.add_argument("--config", default="plants.json",
+                    help="plant list (default plants.json = grafana.hvbatt.com; plants-ka6ta.json = home)")
+    ap.add_argument("--url", help="Grafana base URL (default: GRAFANA_URL or the config's grafana_url)")
     ap.add_argument("--token-file", help="file holding the API token (default: GRAFANA_TOKEN env var)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("export", help="pull the template dashboards from Grafana into dashboards/")
@@ -259,7 +282,7 @@ def main() -> None:
     d.add_argument("--plant", action="append", help="only this instance_id or name (repeatable)")
     args = ap.parse_args()
 
-    cfg = load_cfg()
+    cfg = load_cfg(args.config)
     token = (Path(args.token_file).expanduser().read_text().strip() if args.token_file
              else os.environ.get("GRAFANA_TOKEN", ""))
     if not token:
