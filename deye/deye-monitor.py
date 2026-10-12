@@ -344,6 +344,7 @@ def build_context(raw: dict, cfg: dict) -> dict:
                 (0x0258, 0x0278, 0x027B)]
     inverter_phases = []
     inverter_total  = 0.0
+    inverter_out_raw = 0.0   # unflipped sum (= 0x027C): positive while delivering AC
     for i, (v_r, c_r, p_r) in enumerate(inv_regs):
         v, c, p_raw = get(v_r), get(c_r), get(p_r)
         # Raw register reads negative during observed idle/standby states
@@ -354,6 +355,7 @@ def build_context(raw: dict, cfg: dict) -> dict:
         # production data (positive = delivering power) before trusting.
         p = -p_raw if p_raw is not None else None
         inverter_total += p
+        inverter_out_raw += p_raw
         inverter_phases.append({
             "name":     f"L{i + 1}",
             "voltage":  fmt1(v),
@@ -395,6 +397,14 @@ def build_context(raw: dict, cfg: dict) -> dict:
             "load_pct": load_pct(p, per_phase_w),
         })
     backup_total = get(0x028D)
+
+    # ── On-grid feed (loads between the external CT and the grid port) ──────
+    # Deye has no register for it, so it is the power balance on the grid
+    # side: what comes in through the CT plus what the inverter outputs,
+    # minus what leaves through the Load (backup) port. Checked on a Deye plant
+    # against 24 h of history: within -75..0 W even at 25 kW of export.
+    # Clamped at 0 -- loads never feed power back.
+    ongrid_feed = max(grid_total + inverter_out_raw - backup_total, 0.0)
 
     # ── Battery ───────────────────────────────────────────────────────────────
     bat_pwr = get(0x024E)
@@ -472,6 +482,9 @@ def build_context(raw: dict, cfg: dict) -> dict:
         "backup_power_pct":      load_pct(backup_total, rated_w),
         "backup_power_factor":      "N/A",
         "backup_power_factor_num":  None,
+
+        # ── On-grid feed (AC fed to on-grid side loads) – calculated, see above
+        "ongrid_feed_power_w":      fmt0(ongrid_feed),
 
         # ── Battery ───────────────────────────────────────────────────────────
         "battery_voltage_v":   fmt1(get(0x024B)),
