@@ -15,3 +15,7 @@ __pycache__/
 # Temporary field-diagnostic artifacts
 */night_watch.csv
 */sample_state.sh
+
+# Grafana deploy: plant lists hold customer/plant identifiers -- never commit them
+grafana/plants*.json
+!grafana/plants.example.json

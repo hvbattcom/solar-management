@@ -1,0 +1,32 @@
+{
+  "grafana_url": "https://grafana.example.com",
+  "prometheus_datasource": "prometheus",
+  "new_folder_uid": "",
+  "templates": {
+    "sunpower": {
+      "file": "dashboards/sunpower.json",
+      "source_uid": "<uid of the universal Sunpower dashboard>",
+      "title": "Sunpower-{name}"
+    },
+    "management": {
+      "file": "dashboards/management.json",
+      "source_uid": "<uid of the Management dashboard to export from>",
+      "title": "Management-{name}"
+    }
+  },
+  "plants": [
+    {
+      "instance_id": "PLANT-A",
+      "name": "PLANT-A",
+      "sunpower_uid": "sunpower-plant-a",
+      "management_uid": "management-plant-a",
+      "api_datasource": "Solis-PLANT-A-API"
+    },
+    {
+      "instance_id": "PLANT-B",
+      "name": "PLANT-B",
+      "sunpower_uid": "sunpower-plant-b",
+      "sunpower_title": "Sunpower"
+    }
+  ]
+}

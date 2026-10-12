@@ -16,6 +16,7 @@ solar-management/
 ├── solis/                  # Solis monitor, API, dispatcher, config
 ├── deye/                   # Deye monitor, API, dispatcher, config
 ├── templates/               # Jinja2/format output templates (human, JSON, Prometheus)
+├── grafana/                 # Dashboard templates + per-plant deploy script — see grafana/README.md
 ├── tests/                   # Offline tests (run directly with python3)
 └── requirements.txt         # Shared Python dependencies
 ```
