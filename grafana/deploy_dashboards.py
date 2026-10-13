@@ -20,8 +20,9 @@ Templates
 An existing dashboard is only ever *updated in place*: same uid, same id,
 same folder, saved against its current version. Grafana keeps dashboard
 permissions (the customers' View access) by uid, outside the JSON, so they
-survive. A dashboard that does not exist yet is created only with --create,
-and then still needs its permissions set by hand.
+survive. A dashboard that does not exist yet is created only with --create;
+the script then removes the Viewer-role permission Grafana adds by default
+(every customer is a Viewer), and the plant's user still needs View by hand.
 
 Plant lists (plants.json, or any --config file) name customers and plants, so
 they are git-ignored; plants.example.json shows the format.
@@ -89,6 +90,17 @@ class Grafana:
         if status != 200:
             sys.exit(f"save {dashboard.get('uid')}: HTTP {status} {data}")
         return data
+
+    def revoke_viewer_role(self, uid: str) -> None:
+        """Drop the Viewer-role permission Grafana adds to a new dashboard. Every
+        customer account is a Viewer, so with it each customer would see every
+        plant's new dashboard."""
+        status, data = self.call(
+            f"/api/access-control/dashboards/{urllib.parse.quote(uid)}/builtInRoles/Viewer",
+            "POST", {"permission": ""})
+        if status != 200:
+            sys.exit(f"{uid}: created, but removing the Viewer-role permission failed "
+                     f"(HTTP {status} {data}) — remove it by hand NOW: every customer can see it")
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -259,9 +271,10 @@ def cmd_deploy(g: Grafana, cfg: dict, args) -> None:
             new.update({"uid": uid, "id": None})
             if args.apply:
                 g.save(new, cfg.get("new_folder_uid", ""), msg)
-                print(f"CREATE {label}: created — set its permissions in Grafana")
+                g.revoke_viewer_role(uid)
+                print(f"CREATE {label}: created, Viewer role removed — grant the plant's user View in Grafana")
             else:
-                print(f"CREATE {label}: would be created")
+                print(f"CREATE {label}: would be created (private: no Viewer-role access)")
             continue
 
         new.update({"uid": uid, "id": old["id"], "version": old["version"]})

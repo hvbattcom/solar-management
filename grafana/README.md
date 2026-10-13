@@ -77,8 +77,13 @@ they survive every deploy. Never delete and re-import a plant's dashboard; that
 would drop its permissions.
 
 A plant whose dashboard doesn't exist yet is skipped unless you pass
-`--create`. The new dashboard then has **no customer permissions**: set them in
-Grafana (Dashboard → Settings → Permissions).
+`--create`. Grafana gives a new dashboard a *Viewer role: View* permission by
+default, and every customer account is a Viewer, so it would be visible to all
+customers. The script removes that permission right after creating the
+dashboard (and stops with an error if it can't, telling you to remove it by
+hand). Then give the plant's user *View* in Grafana (Dashboard → Settings →
+Permissions). Removing a permission needs a token with Admin rights on the
+dashboard.
 
 ## What a deploy replaces
 
