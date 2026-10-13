@@ -1606,7 +1606,7 @@
             "steps": [
               {
                 "color": "dark-blue",
-                "value": 0
+                "value": null
               },
               {
                 "color": "semi-dark-blue",
@@ -1617,7 +1617,7 @@
                 "value": 30
               },
               {
-                "color": "semi-dark-green",
+                "color": "light-blue",
                 "value": 48
               },
               {
@@ -1625,16 +1625,20 @@
                 "value": 50
               },
               {
-                "color": "semi-dark-green",
+                "color": "yellow",
                 "value": 52
               },
               {
-                "color": "yellow",
+                "color": "orange",
+                "value": 60
+              },
+              {
+                "color": "red",
                 "value": 70
               },
               {
-                "color": "dark-yellow",
-                "value": 85
+                "color": "semi-dark-red",
+                "value": 80
               }
             ]
           },
