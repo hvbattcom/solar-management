@@ -1473,7 +1473,7 @@
           },
           "min": 0,
           "thresholds": {
-            "mode": "absolute",
+            "mode": "percentage",
             "steps": [
               {
                 "color": "#646464",
@@ -1485,23 +1485,23 @@
               },
               {
                 "color": "orange",
-                "value": 1
+                "value": 15
               },
               {
                 "color": "light-orange",
-                "value": 3000
+                "value": 30
               },
               {
                 "color": "semi-dark-yellow",
-                "value": 6000
+                "value": 45
               },
               {
                 "color": "super-light-yellow",
-                "value": 12000
+                "value": 60
               },
               {
                 "color": "#bfeeff",
-                "value": 24000
+                "value": 75
               }
             ]
           },
@@ -1516,14 +1516,14 @@
       },
       "id": 27,
       "options": {
-        "barShape": "flat",
+        "barShape": "rounded",
         "barWidthFactor": 0.5,
         "effects": {
-          "barGlow": false,
-          "centerGlow": false,
-          "gradient": false
+          "barGlow": true,
+          "centerGlow": true,
+          "gradient": true
         },
-        "endpointMarker": "point",
+        "endpointMarker": "none",
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
@@ -1540,7 +1540,7 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": false,
         "sizing": "auto",
-        "sparkline": false,
+        "sparkline": true,
         "textMode": "auto"
       },
       "pluginVersion": "13.1.1",
@@ -1602,31 +1602,43 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
+            "mode": "percentage",
             "steps": [
               {
-                "color": "green",
-                "value": 0
+                "color": "dark-blue",
+                "value": null
               },
               {
                 "color": "semi-dark-blue",
-                "value": -10000
+                "value": 15
               },
               {
                 "color": "blue",
-                "value": -100
+                "value": 30
+              },
+              {
+                "color": "light-blue",
+                "value": 48
               },
               {
                 "color": "dark-green",
-                "value": 0
+                "value": 50
               },
               {
                 "color": "yellow",
-                "value": 100
+                "value": 52
               },
               {
-                "color": "dark-yellow",
-                "value": 1000
+                "color": "orange",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 70
+              },
+              {
+                "color": "semi-dark-red",
+                "value": 80
               }
             ]
           },
@@ -1641,14 +1653,14 @@
       },
       "id": 26,
       "options": {
-        "barShape": "flat",
+        "barShape": "rounded",
         "barWidthFactor": 0.5,
         "effects": {
-          "barGlow": false,
-          "centerGlow": false,
+          "barGlow": true,
+          "centerGlow": true,
           "gradient": false
         },
-        "endpointMarker": "point",
+        "endpointMarker": "none",
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
@@ -1665,8 +1677,8 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": false,
         "sizing": "auto",
-        "sparkline": false,
-        "textMode": "auto"
+        "sparkline": true,
+        "textMode": "value"
       },
       "pluginVersion": "13.1.1",
       "targets": [
@@ -1972,7 +1984,7 @@
           },
           "noValue": "0",
           "thresholds": {
-            "mode": "absolute",
+            "mode": "percentage",
             "steps": [
               {
                 "color": "#1c4583",
@@ -1980,47 +1992,47 @@
               },
               {
                 "color": "#1c4583",
-                "value": -16000
+                "value": 10
               },
               {
                 "color": "dark-blue",
-                "value": -8000
+                "value": 20
               },
               {
                 "color": "dark-blue",
-                "value": -4000
+                "value": 30
               },
               {
                 "color": "semi-dark-blue",
-                "value": -2000
+                "value": 40
               },
               {
                 "color": "blue",
-                "value": -1
+                "value": 45
               },
               {
                 "color": "blue",
-                "value": 0
+                "value": 50
               },
               {
                 "color": "orange",
-                "value": 1
+                "value": 55
               },
               {
                 "color": "light-orange",
-                "value": 3000
+                "value": 60
               },
               {
                 "color": "yellow",
-                "value": 6000
+                "value": 70
               },
               {
                 "color": "super-light-yellow",
-                "value": 12000
+                "value": 80
               },
               {
                 "color": "#bfeeff",
-                "value": 24000
+                "value": 90
               }
             ]
           },
@@ -2035,14 +2047,14 @@
       },
       "id": 29,
       "options": {
-        "barShape": "flat",
+        "barShape": "rounded",
         "barWidthFactor": 0.5,
         "effects": {
-          "barGlow": false,
-          "centerGlow": false,
+          "barGlow": true,
+          "centerGlow": true,
           "gradient": false
         },
-        "endpointMarker": "point",
+        "endpointMarker": "none",
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
@@ -2059,11 +2071,11 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": false,
         "sizing": "auto",
-        "sparkline": false,
+        "sparkline": true,
         "text": {
           "titleSize": 0
         },
-        "textMode": "auto"
+        "textMode": "value"
       },
       "pluginVersion": "13.1.1",
       "targets": [
@@ -2176,14 +2188,14 @@
       },
       "id": 25,
       "options": {
-        "barShape": "flat",
+        "barShape": "rounded",
         "barWidthFactor": 0.54,
         "effects": {
-          "barGlow": false,
-          "centerGlow": false,
+          "barGlow": true,
+          "centerGlow": true,
           "gradient": true
         },
-        "endpointMarker": "point",
+        "endpointMarker": "none",
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
@@ -2198,7 +2210,7 @@
         "segmentSpacing": 0.3,
         "shape": "gauge",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true,
+        "showThresholdMarkers": false,
         "sizing": "auto",
         "sparkline": true,
         "textMode": "value"
