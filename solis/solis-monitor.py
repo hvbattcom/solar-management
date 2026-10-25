@@ -23,6 +23,14 @@ Serial integrity (see the "Serial check" section):
 * A mismatching serial triggers exactly one re-read before the poll is failed
 * With no `serial` in config, the first double-confirmed serial is pinned and
   every later poll is checked against it
+
+Bit-flip guards (see the "Plausibility checks" section):
+* Inverter-side powers are capped at power_rated_factor × inverter_power_kw
+* pv_total_power must agree with the sum of the strings' V×I
+* Energy counters may not jump faster than the inverter could produce, nor
+  (lifetime totals) ever go down; a rejected or missing counter repeats its
+  last good value instead of dropping to 0
+* Any implausible value triggers a whole-poll re-read before it is dropped
 """
 
 import argparse
@@ -32,6 +40,7 @@ import math
 import re
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -426,6 +435,7 @@ SENSORS = [
 ]
 
 # ── Range map: key-prefix → config keys ─────────────────────────────────────
+POWER_KEY_RE = re.compile(r"_power(_|$)")
 RANGE_MAP = [
     (re.compile(r"^pv_voltage_"),                  "pv_voltage_min",      "pv_voltage_max"),
     (re.compile(r"^(inverter|grid|backup)_voltage_"), "ac_voltage_min",   "ac_voltage_max"),
@@ -434,7 +444,7 @@ RANGE_MAP = [
     (re.compile(r"^(inverter|grid|backup)_current_"), "ac_current_min",   "ac_current_max"),
     (re.compile(r"^battery_current"),              "battery_current_min", "battery_current_max"),
     (re.compile(r"^battery_s[oc]"),                "pct_min",             "pct_max"),
-    (re.compile(r"_power_"),                       "power_w_min",         "power_w_max"),
+    (POWER_KEY_RE,                                 "power_w_min",         "power_w_max"),
     (re.compile(r"_temperature"),                  "temperature_min",     "temperature_max"),
     (re.compile(r"_frequency"),                    "frequency_min",       "frequency_max"),
 ]
@@ -493,6 +503,7 @@ def load_config(cfg_path: Path = None):
         "config_path":    str(cfg_path),
         "expected_serial": sec.get("serial", "").strip(),
         "inverter_power_w": fget("inverter_power_kw", 30.0) * 1000.0,
+        "power_rated_factor": fget("power_rated_factor", None),
         "mppt_count":       sec.getint("mppt_count", fallback=4),
         "legacy_metrics":   sec.getboolean("legacy_metrics", fallback=False),
         "selling_enabled":  sec.getboolean("selling_enabled", fallback=False),
@@ -547,6 +558,14 @@ def decode_value(sensor, raw):
 
 # ── Range validation ─────────────────────────────────────────────────────────
 
+# Powers that flow through the inverter itself, so can never exceed its rating
+# by much. Grid and household load are deliberately absent: a site can draw
+# far more from the grid than the inverter is rated for.
+INVERTER_POWER_KEYS = {
+    "pv_total_power", "inverter_active_power", "battery_power",
+    "backup_load_power", "ac_grid_port_power",
+}
+
 def _range_for_key(key, cfg):
     sec = cfg.get("_raw_sec")
     if sec is None:
@@ -566,7 +585,12 @@ def in_range(key, value, cfg):
     if r is None:
         return True
     lo, hi = r
-    return lo <= value <= hi
+    if not lo <= value <= hi:
+        return False
+    factor = cfg.get("power_rated_factor")
+    if key in INVERTER_POWER_KEYS and factor:
+        return abs(value) <= factor * cfg["inverter_power_w"]
+    return True
 
 # ── Modbus read (reliability layer) ─────────────────────────────────────────
 
@@ -822,6 +846,122 @@ def build_values(regmap, cfg):
         else:
             values[key] = value
 
+    return values, skipped
+
+# ── Plausibility checks ──────────────────────────────────────────────────────
+#
+# The link to the inverter occasionally delivers a register with one bit
+# flipped (seen: 0x8000, 0x100000, 0x800000, 0x40000000 — 32 kW of PV at
+# midnight, a 1 GW battery, +2^28 kWh on a lifetime counter). Range checks
+# catch the high bits; the cross-checks below catch flips that still land in a
+# believable range. A value failing them triggers a re-read; if it still fails,
+# a power is dropped (rendered NaN) and a counter repeats its last good value.
+
+COUNTER_SLACK_KWH   = 5.0   # allowed counter step on top of what rated power explains
+COUNTER_REBASE_POLLS = 3    # after this many consecutive rejections, accept the new value
+
+ENERGY_KEYS   = [s["key"] for s in SENSORS if s["unit"] == "kWh"]
+SENSOR_BY_KEY = {s["key"]: s for s in SENSORS}
+
+_counters      = {}         # key -> {"value", "t", "rejects"}; lives as long as the API process
+_counters_lock = threading.Lock()
+
+
+def _pv_total_implausible(values, cfg):
+    total = values.get("pv_total_power")
+    strings = []
+    for idx in range(1, cfg.get("mppt_count", 4) + 1):
+        v, a = values.get(f"pv_voltage_{idx}"), values.get(f"pv_current_{idx}")
+        if v is None or a is None:
+            return False
+        strings.append(v * a)
+    if total is None:
+        return False
+    sec = cfg.get("_raw_sec") or {}
+    abs_w = float(sec.get("pv_check_abs_w", 1000))
+    rel   = float(sec.get("pv_check_rel", 0.3))
+    s_sum = sum(strings)
+    return abs(total - s_sum) > max(abs_w, rel * max(abs(total), abs(s_sum)))
+
+
+def _counter_implausible(key, value, cfg, now):
+    with _counters_lock:
+        st = _counters.get(key)
+    if value is None or st is None or st["rejects"] >= COUNTER_REBASE_POLLS:
+        return False
+    last = st["value"]
+    hours = max(now - st["t"], 0.0) / 3600.0
+    factor = cfg.get("power_rated_factor") or 1.5
+    max_step = factor * cfg["inverter_power_w"] / 1000.0 * hours + COUNTER_SLACK_KWH
+    if value > last + max_step:
+        return True
+    if value < last:
+        # Lifetime totals never go down; today/month/year reset to ~0
+        return key.endswith("_total") or value > max(COUNTER_SLACK_KWH, 0.1 * last)
+    return False
+
+
+def implausible_keys(values, cfg, now=None):
+    """Keys whose decoded value looks like a corrupted read. A power that failed
+    its range check counts too (other out-of-range values don't: some sites
+    have one out of range permanently, and a re-read would not help)."""
+    now = time.monotonic() if now is None else now
+    bad = [k for k, v in values.items() if v is None and POWER_KEY_RE.search(k)]
+    bad += [k for k in ENERGY_KEYS if _counter_implausible(k, values.get(k), cfg, now)]
+    if _pv_total_implausible(values, cfg):
+        bad.append("pv_total_power")
+    return bad
+
+
+def _skip_entry(key, reason):
+    sensor = SENSOR_BY_KEY[key]
+    return (sensor["name"], sensor["registers"], reason)
+
+
+def settle_values(values, skipped, suspect, now=None):
+    """Drop implausible powers, hold counters at their last good value, and
+    remember the accepted counters for the next poll."""
+    now = time.monotonic() if now is None else now
+    with _counters_lock:
+        for key in suspect:
+            if key not in ENERGY_KEYS and values[key] is not None:
+                skipped.append(_skip_entry(key, f"implausible ({values[key]})"))
+                values[key] = None
+        for key in ENERGY_KEYS:
+            st = _counters.get(key)
+            if key in suspect:
+                skipped.append(_skip_entry(key, f"implausible ({values[key]}), holding {st['value']}"))
+                values[key] = st["value"]
+                st["rejects"] += 1
+            elif values.get(key) is None:
+                if st is not None:
+                    values[key] = st["value"]
+            else:
+                _counters[key] = {"value": values[key], "t": now, "rejects": 0}
+
+
+def read_values(client, cfg):
+    """
+    Poll and decode all sensors, re-polling while too many are missing or any
+    look corrupted. Returns (values_dict, skipped_list).
+    """
+    for attempt in range(MAX_POLL_ATTEMPTS):
+        regmap          = read_registers(client, cfg)
+        values, skipped = build_values(regmap, cfg)
+        suspect         = implausible_keys(values, cfg)
+        none_count      = sum(1 for v in values.values() if v is None)
+
+        if (none_count <= MAX_NONE_THRESHOLD and not suspect) or attempt == MAX_POLL_ATTEMPTS - 1:
+            break
+
+        print(
+            f"#WARN: {none_count} None-valued sensors, implausible: {suspect or '-'} on poll "
+            f"attempt {attempt + 1}/{MAX_POLL_ATTEMPTS}, retrying in {POLL_RETRY_DELAY}s…",
+            file=sys.stderr,
+        )
+        time.sleep(POLL_RETRY_DELAY)
+
+    settle_values(values, skipped, suspect)
     return values, skipped
 
 # ── Serial check ─────────────────────────────────────────────────────────────
@@ -1247,14 +1387,7 @@ def render(fmt, ctx, solis_specific=True):
 def poll(cfg: dict) -> dict:
     client = _connect(cfg["ip"], cfg["port"])
     try:
-        values, skipped = None, []
-        for attempt in range(MAX_POLL_ATTEMPTS):
-            regmap          = read_registers(client, cfg)
-            values, skipped = build_values(regmap, cfg)
-            none_count      = sum(1 for v in values.values() if v is None)
-            if none_count <= MAX_NONE_THRESHOLD or attempt == MAX_POLL_ATTEMPTS - 1:
-                break
-            time.sleep(POLL_RETRY_DELAY)
+        values, skipped = read_values(client, cfg)
 
         # Must run before build_context() — a corrupted serial would otherwise
         # be baked into the label set of every metric this poll exports.
@@ -1461,22 +1594,7 @@ def main():
             dump_registers(client, cfg, args.dump_registers)
             return
 
-        values, skipped = None, []
-
-        for attempt in range(MAX_POLL_ATTEMPTS):
-            regmap         = read_registers(client, cfg)
-            values, skipped = build_values(regmap, cfg)
-            none_count     = sum(1 for v in values.values() if v is None)
-
-            if none_count <= MAX_NONE_THRESHOLD or attempt == MAX_POLL_ATTEMPTS - 1:
-                break
-
-            print(
-                f"#WARN: {none_count} None-valued sensors on poll attempt "
-                f"{attempt + 1}/{MAX_POLL_ATTEMPTS}, retrying in {POLL_RETRY_DELAY}s…",
-                file=sys.stderr,
-            )
-            time.sleep(POLL_RETRY_DELAY)
+        values, skipped = read_values(client, cfg)
 
         # ── Serial check ──
         try:
