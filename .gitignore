@@ -19,3 +19,8 @@ __pycache__/
 # Grafana deploy: plant lists hold customer/plant identifiers -- never commit them
 grafana/plants*.json
 !grafana/plants.example.json
+
+# Secrets -- never commit (a plaintext sudo password sat untracked in solis/.pass on GS48)
+.pass
+*.pass
+.env
